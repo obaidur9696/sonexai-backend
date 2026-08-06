@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import FullDuplex from '../FullDuplexService/fullDuplex.js';
 import logger from '../../utils/Logger.js';
 import { saveAudioChunk, closeAudioStream } from '../../helper/Audiofilewriter.js';
-import SessionTracker from '../sessionTracker/SessionTracker.js';
+import SessionTracker from '../sessionTracker/sessionTracker.js';
 
 class BasePhoneCall {
   constructor() {
