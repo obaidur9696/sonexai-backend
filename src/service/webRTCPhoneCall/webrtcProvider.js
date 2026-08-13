@@ -107,7 +107,7 @@ class WebRTCProvider {
 
   // all handle function event coming from client side
 
-  _handleJoin(session, msg) {
+  async _handleJoin(session, msg) {
     this.logger?.info('Client joining room', { roomId: msg.roomId });
     session.roomId = msg.roomId ?? msg.room ?? 'default';
     let preferences = { ...msg.data };
@@ -123,7 +123,7 @@ class WebRTCProvider {
 
     // If userId exists, fetch user from database
     if (preferences.userId) {
-      this._fetchAndMergeUserData(preferences);
+      await this._fetchAndMergeUserData(preferences);
     }
 
     session.preferences = preferences;
@@ -317,7 +317,7 @@ class WebRTCProvider {
         preferences.age = user.age;
       }
     } catch (error) {
-      console.error('Error fetching user:', error.message);
+      this.logger.error('Error fetching user:', error.message);
     }
   }
 

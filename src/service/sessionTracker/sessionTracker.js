@@ -221,7 +221,7 @@ class SessionTracker {
             }
 
             const minUserWords = this.sessionData.minUserWordsForAnalysis || 30;
-            const eligibility = this._shouldAnalyzeConversation(
+            const eligibility = await this._shouldAnalyzeConversation(
                 this.sessionDoc.messages,
                 minUserWords
             );
@@ -339,20 +339,15 @@ class SessionTracker {
     }
 
     // Analyze conversation based on user messages
-    _shouldAnalyzeConversation(messages, minUserWords = 30) {
+    async _shouldAnalyzeConversation(messages, minUserWords = 30) {
         let userMessageCount = 0;
         let botMessageCount = 0;
-
         let userWordCount = 0;
         let botWordCount = 0;
 
         for (const message of messages) {
             const text = (message.text || "").trim();
-
-            // Count words
-            const wordCount = text
-                ? text.split(/\s+/).filter(Boolean).length
-                : 0;
+            const wordCount = text ? text.split(/\s+/).filter(Boolean).length : 0;
 
             if (message.sender === "user") {
                 userMessageCount++;
@@ -363,27 +358,45 @@ class SessionTracker {
             }
         }
 
+        // 🔍 Get session type from this.sessionDoc
+        const sessionType = this.sessionDoc?.sessionType || 'anonymous';
+
+        // 🚫 If anonymous, never analyze
+        if (sessionType === 'anonymous') {
+            return {
+                shouldAnalyze: false,
+                reason: 'Analysis is only available for authenticated users. Please login to get conversation insights.',
+                thresholds: {
+                    minimumUserWords: minUserWords
+                },
+                statistics: {
+                    totalMessages: messages.length,
+                    userMessages: userMessageCount,
+                    botMessages: botMessageCount,
+                    userWords: userWordCount,
+                    botWords: botWordCount,
+                    totalWords: userWordCount + botWordCount
+                }
+            };
+        }
+
+        // ✅ Authenticated user - check word count
+        const shouldAnalyze = userWordCount >= minUserWords;
+
         return {
-            shouldAnalyze: userWordCount >= minUserWords,
-
-            reason:
-                userWordCount >= minUserWords
-                    ? null
-                    : `Insufficient user conversation. Minimum ${minUserWords} user words required but we have ${userWordCount} words only.`,
-
+            shouldAnalyze: shouldAnalyze,
+            reason: shouldAnalyze
+                ? null
+                : `Insufficient user conversation. Minimum ${minUserWords} user words required but we have ${userWordCount} words only.`,
             thresholds: {
                 minimumUserWords: minUserWords
             },
-
             statistics: {
                 totalMessages: messages.length,
-
                 userMessages: userMessageCount,
                 botMessages: botMessageCount,
-
                 userWords: userWordCount,
                 botWords: botWordCount,
-
                 totalWords: userWordCount + botWordCount
             }
         };
