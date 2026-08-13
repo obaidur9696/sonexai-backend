@@ -78,10 +78,13 @@ const loginUser = asyncHandler(async (req, res) => {
 
         const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
 
+        const isProduction = process.env.NODE_ENV === "production";
+
         const options = {
             httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "strict"
+            secure: isProduction,
+            sameSite: isProduction ? "none" : "lax",
+            path: "/",
         };
 
         return res
@@ -105,10 +108,13 @@ const logoutUser = asyncHandler(async (req, res) => {
             { returnDocument: 'after' }
         );
 
+        const isProduction = process.env.NODE_ENV === "production";
+
         const options = {
             httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "strict"
+            secure: isProduction,
+            sameSite: isProduction ? "none" : "lax",
+            path: "/",
         };
 
         return res
@@ -148,10 +154,13 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 
         const { accessToken, refreshToken } = await generateAcessAndRefreshToken(user._id);
 
+        const isProduction = process.env.NODE_ENV === "production";
+
         const options = {
             httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "strict"
+            secure: isProduction,
+            sameSite: isProduction ? "none" : "lax",
+            path: "/",
         };
 
         return res
@@ -198,7 +207,7 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
         const user = await User.findByIdAndUpdate(
             req.user?._id,
             { $set: updateFields },
-            { returnDocument: 'after',runValidators: true }
+            { returnDocument: 'after', runValidators: true }
         ).select("-password -refreshToken");
 
         if (!user) {

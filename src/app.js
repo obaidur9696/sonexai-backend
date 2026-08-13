@@ -8,10 +8,27 @@ import projectRouter from './routes/project.routes.js';
 
 const app = express();
 
-// CORS configuration - allow your frontend
+
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+// Credentialed CORS must use an explicit origin. Never use `*` here: browsers
+// will reject it when fetch/axios sends credentials.
 app.use(cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173', // Your React frontend port
-    credentials: true, // Allow cookies to be sent
+    origin(origin, callback) {
+        // Requests without Origin are typically server-to-server, curl, or
+        // same-origin requests and do not need a CORS response header.
+        if (!origin || allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+
+        const corsError = new Error('Origin is not allowed by CORS');
+        corsError.statusCode = 403;
+        return callback(corsError);
+    },
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-device-fingerprint']
 }));

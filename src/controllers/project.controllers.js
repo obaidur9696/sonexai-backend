@@ -13,11 +13,14 @@ const getProjectConfiguration = asyncHandler(async (req, res) => {
 
     // ✅ Set device fingerprint as HTTP-only cookie
     if (deviceFingerprint) {
+        const isProduction = process.env.NODE_ENV === 'production';
+
         res.cookie('deviceFingerprint', deviceFingerprint, {
             httpOnly: true,
-            secure: false,
-            sameSite: 'lax',
-            maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+            secure: isProduction,
+            sameSite: isProduction ? 'none' : 'lax',
+            path: '/',
+            maxAge: 30 * 24 * 60 * 60 * 1000,
         });
     }
 
