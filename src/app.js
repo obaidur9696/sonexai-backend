@@ -1,5 +1,4 @@
-import dotenv from 'dotenv';
-dotenv.config({ path: './.env' });
+import './config/env.js';
 
 import express from 'express';
 import cors from 'cors';
@@ -11,12 +10,14 @@ import projectRouter from './routes/project.routes.js';
 
 const app = express();
 
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
-    .split(',')
-    .map((origin) => origin.trim().replace(/\/+$/, ''))
-    .filter(Boolean);
+const allowedOrigins = [...new Set(
+    process.env.CORS_ORIGIN
+        .split(',')
+        .map((origin) => origin.trim().replace(/\/+$/, ''))
+        .filter(Boolean)
+)];
 
-
+console.log('Allowed CORS origins:', allowedOrigins);
 // Credentialed CORS must use an explicit origin. Never use `*` here: browsers
 // will reject it when fetch/axios sends credentials.
 app.use(cors({
