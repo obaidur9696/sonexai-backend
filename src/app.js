@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config({ path: './.env' });
+
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -8,11 +11,11 @@ import projectRouter from './routes/project.routes.js';
 
 const app = express();
 
-
 const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
     .split(',')
-    .map((origin) => origin.trim())
+    .map((origin) => origin.trim().replace(/\/+$/, ''))
     .filter(Boolean);
+
 
 // Credentialed CORS must use an explicit origin. Never use `*` here: browsers
 // will reject it when fetch/axios sends credentials.
@@ -20,7 +23,9 @@ app.use(cors({
     origin(origin, callback) {
         // Requests without Origin are typically server-to-server, curl, or
         // same-origin requests and do not need a CORS response header.
-        if (!origin || allowedOrigins.includes(origin)) {
+        const requestOrigin = origin?.replace(/\/+$/, '');
+
+        if (!origin || allowedOrigins.includes(requestOrigin)) {
             return callback(null, true);
         }
 
