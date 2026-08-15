@@ -3,7 +3,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { User } from '../models/user.models.js';
 import jwt from 'jsonwebtoken'
-
+import logger from '../utils/Logger.js';
 
 const generateAcessAndRefreshToken = async (userId) => {
     try {
@@ -15,7 +15,8 @@ const generateAcessAndRefreshToken = async (userId) => {
 
         return { accessToken, refreshToken }
     }
-    catch {
+    catch (error) {
+        logger.error('Failed to generate user access and refresh tokens', error, { userId: userId.toString() });
         throw new ApiError(500, "Something went wrong while generating refresh and access token")
     }
 }
@@ -47,8 +48,10 @@ const registerUser = asyncHandler(async (req, res) => {
             throw new ApiError(500, "Something went wrong while registering user");
         }
 
+        logger.info('User registered successfully', { userId: createdUser._id.toString() });
         return res.status(201).json(new ApiResponse(201, createdUser, "User registered successfully"));
     } catch (error) {
+        logger.error('User registration failed', error);
         return res.status(error.statusCode || 500).json({
             success: false,
             message: error.message || "Internal Server Error"
@@ -87,12 +90,14 @@ const loginUser = asyncHandler(async (req, res) => {
             path: "/",
         };
 
+        logger.info('User logged in successfully', { userId: user._id.toString() });
         return res
             .status(200)
             .cookie("accessToken", accessToken, options)
             .cookie("refreshToken", refreshToken, options)
             .json(new ApiResponse(200, { user: loggedInUser }, "User logged in successfully"));
     } catch (error) {
+        logger.error('User login failed', error);
         return res.status(error.statusCode || 500).json({
             success: false,
             message: error.message || "Internal Server Error"
@@ -117,12 +122,14 @@ const logoutUser = asyncHandler(async (req, res) => {
             path: "/",
         };
 
+        logger.info('User logged out successfully', { userId: req.user?._id?.toString() });
         return res
             .status(200)
             .clearCookie("accessToken", options)
             .clearCookie("refreshToken", options)
             .json(new ApiResponse(200, {}, "User logged out successfully"));
     } catch (error) {
+        logger.error('User logout failed', error, { userId: req.user?._id?.toString() });
         return res.status(error.statusCode || 500).json({
             success: false,
             message: error.message || "Internal Server Error"
@@ -163,12 +170,14 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
             path: "/",
         };
 
+        logger.info('User access token refreshed successfully', { userId: user._id.toString() });
         return res
             .status(200)
             .cookie("accessToken", accessToken, options)
             .cookie("refreshToken", refreshToken, options)
             .json(new ApiResponse(200, { accessToken: true, refreshToken: true }, "Access token refreshed successfully"));
     } catch (error) {
+        logger.error('User access token refresh failed', error);
         return res.status(error.statusCode || 401).json({
             success: false,
             message: error.message || "Invalid refresh token"
@@ -179,10 +188,12 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 const getCurrentUser = asyncHandler(async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select("-password -refreshToken");
+        logger.info('Current user fetched successfully', { userId: req.user._id.toString() });
         return res
             .status(200)
             .json(new ApiResponse(200, user, "Current user fetched successfully"));
     } catch (error) {
+        logger.error('Failed to fetch current user', error, { userId: req.user?._id?.toString() });
         return res.status(error.statusCode || 500).json({
             success: false,
             message: error.message || "Internal Server Error"
@@ -214,10 +225,12 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
             throw new ApiError(404, "User not found");
         }
 
+        logger.info('Account details updated successfully', { userId: user._id.toString() });
         return res
             .status(200)
             .json(new ApiResponse(200, user, "Account details updated successfully"));
     } catch (error) {
+        logger.error('Failed to update account details', error, { userId: req.user?._id?.toString() });
         return res.status(error.statusCode || 500).json({
             success: false,
             message: error.message || "Internal Server Error"

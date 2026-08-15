@@ -3,6 +3,7 @@ import { User } from '../models/user.models.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
+import logger from '../utils/Logger.js';
 
 /**
  * @desc    Get all sessions for authenticated user (lightweight)
@@ -10,6 +11,7 @@ import { ApiResponse } from '../utils/ApiResponse.js';
  * @access  Private
  */
 export const getUserSessions = asyncHandler(async (req, res) => {
+    try {
     const userId = req.user._id;
     const { limit = 20, page = 1, status = 'ended' } = req.query;
 
@@ -48,6 +50,11 @@ export const getUserSessions = asyncHandler(async (req, res) => {
         endedAt: session.endedAt
     }));
 
+    logger.info('User sessions fetched successfully', {
+        userId: userId.toString(),
+        returnedSessions: formattedSessions.length,
+        totalSessions
+    });
     return res.status(200).json(
         new ApiResponse(200, {
             sessions: formattedSessions,
@@ -59,6 +66,10 @@ export const getUserSessions = asyncHandler(async (req, res) => {
             }
         }, 'Sessions fetched successfully')
     );
+    } catch (error) {
+        logger.error('Failed to fetch user sessions', error, { userId: req.user?._id?.toString() });
+        throw error;
+    }
 });
 
 /**
@@ -67,6 +78,7 @@ export const getUserSessions = asyncHandler(async (req, res) => {
  * @access  Private
  */
 export const getSessionById = asyncHandler(async (req, res) => {
+    try {
     const { sessionId } = req.params;
     const userId = req.user._id;
 
@@ -126,9 +138,17 @@ export const getSessionById = asyncHandler(async (req, res) => {
         // Insights - only if completed
         insights: insights
     };
+    logger.info('Session fetched successfully', { userId: userId.toString(), sessionId });
     return res.status(200).json(
         new ApiResponse(200, responseData, 'Session fetched successfully')
     );
+    } catch (error) {
+        logger.error('Failed to fetch session', error, {
+            userId: req.user?._id?.toString(),
+            sessionId: req.params.sessionId
+        });
+        throw error;
+    }
 });
 
 /**
@@ -137,6 +157,7 @@ export const getSessionById = asyncHandler(async (req, res) => {
  * @access  Private
  */
 export const renameSession = asyncHandler(async (req, res) => {
+    try {
     const { sessionId } = req.params;
     const { title } = req.body;
     const userId = req.user._id;
@@ -168,12 +189,20 @@ export const renameSession = asyncHandler(async (req, res) => {
         throw new ApiError(404, 'Session not found');
     }
 
+    logger.info('Session renamed successfully', { userId: userId.toString(), sessionId });
     return res.status(200).json(
         new ApiResponse(200, {
             id: session.sessionId,
             title: session.title
         }, 'Session renamed successfully')
     );
+    } catch (error) {
+        logger.error('Failed to rename session', error, {
+            userId: req.user?._id?.toString(),
+            sessionId: req.params.sessionId
+        });
+        throw error;
+    }
 });
 
 /**
@@ -182,6 +211,7 @@ export const renameSession = asyncHandler(async (req, res) => {
  * @access  Private
  */
 export const deleteSession = asyncHandler(async (req, res) => {
+    try {
     const { sessionId } = req.params;
     const userId = req.user._id;
 
@@ -213,9 +243,17 @@ export const deleteSession = asyncHandler(async (req, res) => {
         // ❌ Remove $inc for totalSessions and totalTalkTimeSeconds
     });
 
+    logger.info('Session deleted successfully', { userId: userId.toString(), sessionId });
     return res.status(200).json(
         new ApiResponse(200, null, 'Session deleted successfully')
     );
+    } catch (error) {
+        logger.error('Failed to delete session', error, {
+            userId: req.user?._id?.toString(),
+            sessionId: req.params.sessionId
+        });
+        throw error;
+    }
 });
 
 /**
@@ -229,6 +267,7 @@ export const deleteSession = asyncHandler(async (req, res) => {
  * @access  Private
  */
 export const getGlobalSessionStats = asyncHandler(async (req, res) => {
+    try {
     // Step 1: Get stats from all authenticated users
     const userStats = await User.aggregate([
         {
@@ -267,7 +306,12 @@ export const getGlobalSessionStats = asyncHandler(async (req, res) => {
         totalTalkTimeSeconds: userResult.totalTalkTimeSeconds + anonymousResult.totalTalkTimeSeconds
     };
 
+    logger.info('Global session statistics fetched successfully', combinedResult);
     return res.status(200).json(
         new ApiResponse(200, combinedResult, 'Global session stats fetched successfully')
     );
+    } catch (error) {
+        logger.error('Failed to fetch global session statistics', error);
+        throw error;
+    }
 });

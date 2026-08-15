@@ -2,8 +2,10 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { Project } from '../models/project.models.js';
+import logger from '../utils/Logger.js';
 
 const getProjectConfiguration = asyncHandler(async (req, res) => {
+    try {
     // ✅ Read from URL query parameters
     const { corporate, webrtcId } = req.query;
     const projectCorporate = corporate || process.env.DEFAULT_PROJECT_CORPORATE || 'A2plus';
@@ -40,6 +42,7 @@ const getProjectConfiguration = asyncHandler(async (req, res) => {
             throw new ApiError(404, `WebRTC configuration with ID '${webrtcId}' not found`);
         }
 
+        logger.info('WebRTC project configuration fetched successfully', { projectCorporate, webrtcId });
         return res.status(200).json(
             new ApiResponse(200, webrtcConfig, 'WebRTC configuration fetched successfully')
         );
@@ -47,6 +50,13 @@ const getProjectConfiguration = asyncHandler(async (req, res) => {
 
     // ❌ If webrtcId is NOT provided, return error (don't send full project)
     throw new ApiError(400, 'webrtcId query parameter is required');
+    } catch (error) {
+        logger.error('Failed to fetch WebRTC project configuration', error, {
+            projectCorporate: req.query.corporate || process.env.DEFAULT_PROJECT_CORPORATE || 'A2plus',
+            webrtcId: req.query.webrtcId
+        });
+        throw error;
+    }
 });
 
 export { getProjectConfiguration };
