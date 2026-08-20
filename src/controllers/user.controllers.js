@@ -16,7 +16,11 @@ const generateAcessAndRefreshToken = async (userId) => {
         return { accessToken, refreshToken }
     }
     catch (error) {
-        logger.error('Failed to generate user access and refresh tokens', error, { userId: userId.toString() });
+        logger?.error('[Auth] Failed to generate tokens:', {
+            error: error.message,
+            stack: error.stack,
+            userId: userId?.toString()
+        });
         throw new ApiError(500, "Something went wrong while generating refresh and access token")
     }
 }
@@ -24,6 +28,14 @@ const generateAcessAndRefreshToken = async (userId) => {
 const registerUser = asyncHandler(async (req, res) => {
     try {
         const { email, password, firstName, lastName, gender, age } = req.body;
+
+        // Log registration attempt
+        logger?.info('[Auth] Registration attempt:', {
+            email,
+            firstName,
+            lastName,
+            hasPassword: !!password
+        });
 
         if ([email, password, firstName, lastName].some(field => !field || field.trim() === "")) {
             throw new ApiError(400, "All fields are required");
@@ -48,13 +60,17 @@ const registerUser = asyncHandler(async (req, res) => {
             throw new ApiError(500, "Something went wrong while registering user");
         }
 
-        logger.info('User registered successfully', { userId: createdUser._id.toString() });
+        logger?.info(`[Auth] User registered successfully: ${createdUser._id}`);
         return res.status(201).json(new ApiResponse(201, createdUser, "User registered successfully"));
     } catch (error) {
-        logger.error('User registration failed', error);
+        logger?.error('[Auth] Registration failed:', {
+            error: error.message,
+            stack: error.stack,
+            email: req.body?.email
+        });
         return res.status(error.statusCode || 500).json({
             success: false,
-            message: error.message || "Internal Server Error"
+            message: error.message || "Unable to register. Please try again."
         });
     }
 });
@@ -62,6 +78,12 @@ const registerUser = asyncHandler(async (req, res) => {
 const loginUser = asyncHandler(async (req, res) => {
     try {
         const { email, password } = req.body;
+
+        // Log login attempt
+        logger?.info('[Auth] Login attempt:', {
+            email,
+            hasPassword: !!password
+        });
 
         if (!email || !password) {
             throw new ApiError(400, "Email and password are required");
@@ -90,23 +112,32 @@ const loginUser = asyncHandler(async (req, res) => {
             path: "/",
         };
 
-        logger.info('User logged in successfully', { userId: user._id.toString() });
+        logger?.info(`[Auth] User logged in successfully: ${user._id}`);
         return res
             .status(200)
             .cookie("accessToken", accessToken, options)
             .cookie("refreshToken", refreshToken, options)
             .json(new ApiResponse(200, { user: loggedInUser }, "User logged in successfully"));
     } catch (error) {
-        logger.error('User login failed', error);
+        logger?.error('[Auth] Login failed:', {
+            error: error.message,
+            stack: error.stack,
+            email: req.body?.email
+        });
         return res.status(error.statusCode || 500).json({
             success: false,
-            message: error.message || "Internal Server Error"
+            message: error.message || "Unable to login. Please try again."
         });
     }
 });
 
 const logoutUser = asyncHandler(async (req, res) => {
     try {
+        // Log logout attempt
+        logger?.info('[Auth] Logout attempt:', {
+            userId: req.user?._id?.toString()
+        });
+
         await User.findByIdAndUpdate(
             req.user._id,
             { $unset: { refreshToken: 1 } },
@@ -122,17 +153,21 @@ const logoutUser = asyncHandler(async (req, res) => {
             path: "/",
         };
 
-        logger.info('User logged out successfully', { userId: req.user?._id?.toString() });
+        logger?.info(`[Auth] User logged out successfully: ${req.user?._id}`);
         return res
             .status(200)
             .clearCookie("accessToken", options)
             .clearCookie("refreshToken", options)
             .json(new ApiResponse(200, {}, "User logged out successfully"));
     } catch (error) {
-        logger.error('User logout failed', error, { userId: req.user?._id?.toString() });
+        logger?.error('[Auth] Logout failed:', {
+            error: error.message,
+            stack: error.stack,
+            userId: req.user?._id?.toString()
+        });
         return res.status(error.statusCode || 500).json({
             success: false,
-            message: error.message || "Internal Server Error"
+            message: error.message || "Unable to logout. Please try again."
         });
     }
 });
@@ -140,6 +175,13 @@ const logoutUser = asyncHandler(async (req, res) => {
 const refreshAccessToken = asyncHandler(async (req, res) => {
     try {
         const incomingRefreshToken = req.cookies?.refreshToken || req.body.refreshToken;
+
+        // Log refresh attempt
+        logger?.info('[Auth] Token refresh attempt:', {
+            hasRefreshToken: !!incomingRefreshToken,
+            fromCookie: !!req.cookies?.refreshToken,
+            fromBody: !!req.body?.refreshToken
+        });
 
         if (!incomingRefreshToken) {
             throw new ApiError(401, "Unauthorized request - no refresh token");
@@ -170,17 +212,20 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
             path: "/",
         };
 
-        logger.info('User access token refreshed successfully', { userId: user._id.toString() });
+        logger?.info(`[Auth] Token refreshed successfully: ${user._id}`);
         return res
             .status(200)
             .cookie("accessToken", accessToken, options)
             .cookie("refreshToken", refreshToken, options)
             .json(new ApiResponse(200, { accessToken: true, refreshToken: true }, "Access token refreshed successfully"));
     } catch (error) {
-        logger.error('User access token refresh failed', error);
+        logger?.error('[Auth] Token refresh failed:', {
+            error: error.message,
+            stack: error.stack
+        });
         return res.status(error.statusCode || 401).json({
             success: false,
-            message: error.message || "Invalid refresh token"
+            message: error.message || "Unable to refresh session. Please login again."
         });
     }
 });
@@ -188,15 +233,20 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 const getCurrentUser = asyncHandler(async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select("-password -refreshToken");
-        logger.info('Current user fetched successfully', { userId: req.user._id.toString() });
+        
+        logger?.info(`[Auth] Current user fetched: ${req.user._id}`);
         return res
             .status(200)
             .json(new ApiResponse(200, user, "Current user fetched successfully"));
     } catch (error) {
-        logger.error('Failed to fetch current user', error, { userId: req.user?._id?.toString() });
+        logger?.error('[Auth] Failed to fetch current user:', {
+            error: error.message,
+            stack: error.stack,
+            userId: req.user?._id?.toString()
+        });
         return res.status(error.statusCode || 500).json({
             success: false,
-            message: error.message || "Internal Server Error"
+            message: error.message || "Unable to fetch user details. Please try again."
         });
     }
 });
@@ -204,6 +254,16 @@ const getCurrentUser = asyncHandler(async (req, res) => {
 const updateAccountDetails = asyncHandler(async (req, res) => {
     try {
         const { firstName, lastName, email, age } = req.body;
+
+        // Log update attempt with what fields are being updated
+        logger?.info('[Auth] Account update attempt:', {
+            userId: req.user?._id?.toString(),
+            fieldsToUpdate: Object.keys(req.body),
+            firstName,
+            lastName,
+            email,
+            age
+        });
 
         const updateFields = {};
         if (firstName) updateFields.firstName = firstName;
@@ -225,15 +285,20 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
             throw new ApiError(404, "User not found");
         }
 
-        logger.info('Account details updated successfully', { userId: user._id.toString() });
+        logger?.info(`[Auth] Account updated successfully: ${user._id}`);
         return res
             .status(200)
             .json(new ApiResponse(200, user, "Account details updated successfully"));
     } catch (error) {
-        logger.error('Failed to update account details', error, { userId: req.user?._id?.toString() });
+        logger?.error('[Auth] Failed to update account:', {
+            error: error.message,
+            stack: error.stack,
+            userId: req.user?._id?.toString(),
+            fieldsAttempted: Object.keys(req.body || {})
+        });
         return res.status(error.statusCode || 500).json({
             success: false,
-            message: error.message || "Internal Server Error"
+            message: error.message || "Unable to update account. Please try again."
         });
     }
 });

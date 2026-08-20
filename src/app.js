@@ -17,7 +17,6 @@ const allowedOrigins = [...new Set(
         .filter(Boolean)
 )];
 
-console.log('Allowed CORS origins:', allowedOrigins);
 // Credentialed CORS must use an explicit origin. Never use `*` here: browsers
 // will reject it when fetch/axios sends credentials.
 app.use(cors({

@@ -8,7 +8,8 @@ const OPENAI_MODEL = 'gpt-4o-mini';
 const MIN_USER_WORDS = 30; // Minimum user words required for analysis
 
 class SessionTracker {
-    constructor({ preferences, basePhoneCall, logger }) {
+    constructor({ preferences, basePhoneCall, clientId, logger}) {
+        this.clientId = clientId;
         this.sessionId = uuidv4()
         this.preferences = preferences;
         this.basePhoneCall = basePhoneCall;
@@ -45,7 +46,7 @@ class SessionTracker {
                 const user = await User.findById(userId);
                 if (!user) {
                     this.logger.warn('Invalid user ID provided in session preferences', { userId });
-                    this.basePhoneCall.sendError(this.sessionId, 'Invalid user ID. Please login again.');
+                    this.basePhoneCall.sendError(this.clientId, 'Invalid user ID. Please login again.');
                     return null;
                 }
                 sessionType = 'authenticated';
@@ -70,7 +71,7 @@ class SessionTracker {
                 if (totalTalkTimeSeconds >= maxDurationSeconds) {
                     this.logger.info('Free trial limit reached', { deviceFingerprint, totalTalkTimeSeconds });
                     this.basePhoneCall.sendError(
-                        this.sessionId,
+                        this.clientId,
                         `Free trial limit reached (${maxDurationSeconds / 60} minutes). Please login to continue.`
                     );
                     return null;
@@ -84,7 +85,7 @@ class SessionTracker {
                     deviceFingerprint
                 });
                 this.basePhoneCall.sendError(
-                    this.sessionId,
+                    this.clientId,
                     'Unable to start session. Please login to access the service or ensure your device is properly recognized.'
                 );
                 return null;
@@ -132,7 +133,7 @@ class SessionTracker {
 
         } catch (error) {
             this.logger.error('[SessionTracker] Initialize error', { error: error.message });
-            this.basePhoneCall.sendError(this.sessionId, 'Session initialization failed. You can try again.');
+            this.basePhoneCall.sendError(this.clientId, 'Session initialization failed. You can try again.');
             return null;
         }
     }
