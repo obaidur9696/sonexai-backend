@@ -40,6 +40,7 @@ const sessionSchema = new Schema(
         preferences: {
             language: String,
             topic: String,
+            name: String,
             conversationDepth: {
                 type: String,
                 enum: ['concise', 'balanced', 'comprehensive']

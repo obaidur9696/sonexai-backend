@@ -254,7 +254,15 @@ class WebRTCProvider {
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.event === 'bot-ready') {
         this.logger?.info('Bot is ready', { roomId: session.roomId });
-        this._send(session.ws, { type: 'bot-ready', sessionId: msg?.sessionId });
+        this._send(session.ws, {
+          type: 'bot-ready',
+          sessionId: msg.sessionId,
+          status: msg.status,
+          createdAt: msg.createdAt,
+          topic: msg.topic,
+          name: msg.name,
+          preferences: msg.preferences
+        });
       }
 
       if (msg.event === 'media') {

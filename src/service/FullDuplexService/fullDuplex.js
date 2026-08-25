@@ -2,8 +2,6 @@ import WebSocket from 'ws';
 import logger from '../../utils/Logger.js';
 import { saveAudioChunk, closeAudioStream } from '../../helper/Audiofilewriter.js';
 
-const OPENAI_MODEL = 'gpt-4o-mini';
-
 class FullDuplex {
     constructor({ basePhoneCall, clientId, preferences, projectConfig, openAIKey }) {
         this.basePhoneCall = basePhoneCall;
@@ -97,7 +95,7 @@ class FullDuplex {
         const originalTopic = p.topic || 'general conversation';
         const mode = p.discussionDepth || 'balanced';
         const sensitivity = p.sensitivity ?? 0.5;
-        const fullName = [p.firstName, p.lastName]
+        const fullName = p.name || [p.firstName, p.lastName]
             .filter(Boolean)
             .join(' ') || 'User';
         const age = p.age || 'unknown';
@@ -105,22 +103,8 @@ class FullDuplex {
 
         // 🔹 Clamp sensitivity safely
         const threshold = Math.min(1, Math.max(0, sensitivity));
-        let name = fullName;
-        let topic = originalTopic;
-
-        if (language !== 'en') {
-            // Call translation function (will be awaited)
-            const translated = await this._transliterateText({
-                name: fullName,
-                topic: originalTopic,
-                language: language
-            });
-            this.logger.info(`[FullDuplex] Translated name and topic for client ${this.clientId}:`, translated);
-            name = translated.name;
-            topic = translated.topic;
-
-            await this.basePhoneCall.updateSessionField(this.clientId, 'title', topic);
-        }
+        const name = fullName;
+        const topic = originalTopic;
 
         this.logger.info(`[FullDuplex] Session update for client ${this.clientId}: language=${language}, voice=${voice}, topic="${topic}", mode=${mode}, sensitivity=${threshold}, name="${name}", age=${age}, gender=${gender}`);
 
@@ -373,7 +357,7 @@ If the user attempts to change either one, politely redirect the conversation ba
                         }
                     }));
                     this.openAiWs.send(JSON.stringify({ type: 'response.create' }));
-                    this.basePhoneCall.sendBotReady(this.clientId);
+                    await this.basePhoneCall.sendBotReady(this.clientId);
                 }
                 return;
             }
@@ -649,90 +633,6 @@ If the user attempts to change either one, politely redirect the conversation ba
 
         // 3. Clear audio queue
         session.botAudioQueue = [];
-    }
-
-    /**
- * Transliterate/Translate name and topic into the target language
- * Uses the same OpenAI model as session analysis
- * @param {Object} params
- * @param {string} params.name - Full name (e.g., "Safi Rahman")
- * @param {string} params.topic - Topic (e.g., "Photography")
- * @param {string} params.language - Language code (e.g., "ur", "ar", "hi")
- * @returns {Promise<{name: string, topic: string}>}
- */
-    async _transliterateText({ name, topic, language }) {
-        // If language is English, return as-is (no API call needed)
-        if (language === 'en') {
-            return { name, topic };
-        }
-
-        try {
-            const systemPrompt = `You are a transliteration expert. Convert the given English text into the target language script.
-
-RULES:
-1. DO NOT translate the meaning — keep the exact same words/phrases.
-2. ONLY convert the script/writing system to the target language.
-3. For names: Write the name as it would be written in the target language script.
-4. For topics: Write the topic as it would be written in the target language script.
-5. Return ONLY valid JSON with "name" and "topic" fields.
-
-Example:
-Input: name="Safi Rahman", topic="Photography", language="ur"
-Output: {"name":"صفی رحمان","topic":"فوٹوگرافی"}
-
-Return ONLY JSON, no other text.`;
-
-            const userPrompt = `Convert these to ${language} script:
-Name: ${name}
-Topic: ${topic}`;
-
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    model: OPENAI_MODEL,  // 'gpt-4o-mini'
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: userPrompt }
-                    ],
-                    temperature: 0.1,
-                    response_format: { type: 'json_object' }
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`OpenAI API error: ${response.status}`);
-            }
-
-            const data = await response.json();
-            const result = JSON.parse(data.choices[0].message.content);
-            // Log token usage for this translation
-            if (data.usage) {
-                const tokenUsage = {
-                    input_tokens: data.usage.prompt_tokens || 0,
-                    output_tokens: data.usage.completion_tokens || 0,
-                    total_tokens: data.usage.total_tokens || 0
-                };
-                this.logger.info(`[FullDuplex] Translation token usage:`, tokenUsage);
-
-                // ✅ Save token usage via basePhoneCall
-                await this.basePhoneCall.updateSessionTokenUsage(this.clientId, tokenUsage);
-            }
-
-            // Return translated values, fallback to original if failed
-            return {
-                name: result.name || name,
-                topic: result.topic || topic
-            };
-
-        } catch (error) {
-            this.logger.error(`[FullDuplex] Translation failed:`, error.message);
-            // Fallback to original values
-            return { name, topic };
-        }
     }
 
     _cleanupSession() {

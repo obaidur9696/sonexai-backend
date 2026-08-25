@@ -55,7 +55,6 @@ class BasePhoneCall {
       return;
     }
 
-    this.logger?.debug(`[BasePhoneCall] Received event ${msg.event} from ${clientId}`);
 
     switch (msg.event) {
       case 'start':
@@ -206,7 +205,7 @@ class BasePhoneCall {
     }
   }
 
-  sendBotReady(clientId) {
+  async sendBotReady(clientId) {
     const session = this.sessions.get(clientId);
     if (!session) {
       this.logger?.warn(`[BasePhoneCall] Bot-ready send attempt for unknown client: ${clientId}`);
@@ -214,14 +213,24 @@ class BasePhoneCall {
     }
 
     try {
+      let activeSession;
       if (session.sessionTracker && session.isInitialized) {
-        session.sessionTracker.activate();
+        activeSession = await session.sessionTracker.activate();
+      }
+
+      if (!activeSession) {
+        throw new Error('Session could not be activated');
       }
       
       this.logger?.info(`[BasePhoneCall] Bot ready for client ${clientId}`);
       this._send(session, { 
         event: 'bot-ready', 
-        sessionId: session.sessionId 
+        sessionId: activeSession.sessionId,
+        status: activeSession.status,
+        createdAt: activeSession.createdAt,
+        topic: activeSession.topic,
+        name: activeSession.name,
+        preferences: activeSession.preferences
       });
     } catch (error) {
       this.logger?.error(`[BasePhoneCall] Failed to send bot-ready to ${clientId}:`, error.message);
@@ -318,23 +327,6 @@ class BasePhoneCall {
       this.logger?.debug(`[BasePhoneCall] Token usage updated for ${clientId}`);
     } catch (error) {
       this.logger?.error(`[BasePhoneCall] Failed to update token usage for ${clientId}:`, error.message);
-    }
-  }
-
-  async updateSessionField(clientId, fieldName, value) {
-    const session = this.sessions.get(clientId);
-    if (!session || !session.sessionTracker) {
-      this.logger?.warn(`[BasePhoneCall] Session field update for ${clientId} - session or tracker not found`);
-      return false;
-    }
-
-    try {
-      const result = await session.sessionTracker.updateField(fieldName, value);
-      this.logger?.debug(`[BasePhoneCall] Session field ${fieldName} updated for ${clientId}`);
-      return result;
-    } catch (error) {
-      this.logger?.error(`[BasePhoneCall] Failed to update field ${fieldName} for ${clientId}:`, error.message);
-      return false;
     }
   }
 

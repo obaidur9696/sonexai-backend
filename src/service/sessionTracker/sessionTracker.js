@@ -2,6 +2,7 @@ import { Session } from '../../models/session.models.js';
 import { User } from '../../models/user.models.js';
 import { Project } from '../../models/project.models.js';
 import { v4 as uuidv4 } from 'uuid';
+import { isEnglishLanguage, transliterateText } from '../../utils/transliterateText.js';
 
 
 const OPENAI_MODEL = 'gpt-4o-mini';
@@ -126,6 +127,8 @@ class SessionTracker {
                     }
                 });
                 await session.save();
+
+                await this._applyTransliteratedPreferences(session);
             }
 
             this.sessionDoc = session;
@@ -149,9 +152,69 @@ class SessionTracker {
                 await this.sessionDoc.save();
                 this.logger.info(`[SessionTracker] Session activated: ${this.sessionId}`);
             }
+
+            if (this.sessionDoc?.status === 'active') {
+                return this._getActiveSessionPayload();
+            }
+
+            return null;
         } catch (error) {
             this.logger.error(`[SessionTracker] Activate error:`, error.message);
+            return null;
         }
+    }
+
+    async _applyTransliteratedPreferences(session) {
+        const language = this.preferences?.language || 'en';
+        const fullName = [this.preferences?.firstName, this.preferences?.lastName]
+            .filter(Boolean)
+            .join(' ') || 'User';
+        const topic = this.preferences?.topic || 'general conversation';
+
+        if (isEnglishLanguage(language)) {
+            return;
+        }
+
+        const translated = await transliterateText({
+            name: fullName,
+            topic,
+            language,
+            logger: this.logger
+        });
+
+        this.preferences.name = translated.name;
+        this.preferences.topic = translated.topic;
+        session.preferences.name = translated.name;
+        session.preferences.topic = translated.topic;
+        session.title = translated.topic;
+
+        if (translated.tokenUsage) {
+            session.tokenUsage.input_tokens += translated.tokenUsage.input_tokens;
+            session.tokenUsage.output_tokens += translated.tokenUsage.output_tokens;
+            session.tokenUsage.total_tokens += translated.tokenUsage.total_tokens;
+            this.logger.info('[SessionTracker] Transliteration token usage:', translated.tokenUsage);
+        }
+
+        await session.save();
+        this.logger.info(
+            `[SessionTracker] Preferences transliterated for session ${this.sessionId}: ` +
+            `topic="${translated.topic}", name="${translated.name}"`
+        );
+    }
+
+    _getActiveSessionPayload() {
+        const preferences = this.sessionDoc.preferences || {};
+
+        return {
+            sessionId: this.sessionDoc.sessionId,
+            status: this.sessionDoc.status,
+            createdAt: this.sessionDoc.createdAt,
+            topic: preferences.topic || this.sessionDoc.title || 'New Conversation',
+            name: preferences.name || [this.preferences?.firstName, this.preferences?.lastName]
+                .filter(Boolean)
+                .join(' ') || 'User',
+            preferences
+        };
     }
 
     async recordMessage(sender, text) {
@@ -323,22 +386,6 @@ class SessionTracker {
             };
         }
     }
-    // Helper method to update any field
-    async updateField(fieldName, value) {
-        try {
-            if (this.sessionDoc) {
-                this.sessionDoc[fieldName] = value;
-                await this.sessionDoc.save();
-                this.logger.info(`[SessionTracker] Field updated: ${fieldName} = ${value}`);
-                return true;
-            }
-            return false;
-        } catch (error) {
-            this.logger.error(`[SessionTracker] Update field error:`, error.message);
-            return false;
-        }
-    }
-
     // Analyze conversation based on user messages
     async _shouldAnalyzeConversation(messages, minUserWords = 30) {
         let userMessageCount = 0;
@@ -444,7 +491,7 @@ STRICT SCHEMA RULES:
    - value: null
    - score: null
    - level: null
-   - feedback: "Insufficient conversation data."
+   - feedback: a short equivalent of "Insufficient conversation data" in the preferred language
    - items: []
 6. Never guess, invent, exaggerate, or use information not present in the messages.
 
@@ -452,9 +499,9 @@ STRICT SCHEMA RULES:
 LANGUAGE OUTPUT RULES — HIGHEST PRIORITY
 ==================================================
 
-The preferred language provided in the input is the mandatory report language.
+Use preferredLanguage from the input as the mandatory language for every generated analysis value. It is the configured session language and must not be overridden by the languages detected in user messages.
 
-Every generated TEXT value must be written only in that preferred language, including:
+Every generated human-readable TEXT value must be written only in preferredLanguage, including:
 - conversationTitle.value
 - summary.value
 - communicationSkill.level
@@ -470,21 +517,15 @@ Every generated TEXT value must be written only in that preferred language, incl
 - overallConversation.level
 - overallConversation.feedback
 
-Examples:
-- If preferred language is "ur", every generated text field must be in Urdu.
-- If preferred language is "hi", every generated text field must be in Hindi.
-- If preferred language is "en", every generated text field must be in English.
+For every preferredLanguage value, every generated text field must use that same language.
 
-Never generate an English title for an Urdu or Hindi report.
-Never mix English, Urdu, Hindi, or any other language in generated text.
-Do not use English level labels such as "Excellent", "Good", "Average", "Fair", or "Poor" unless English is the preferred language.
+Do not mix languages in generated text. A level is a human-readable text field and must always be written in preferredLanguage.
 
-Use natural, professional level labels in the preferred language:
-- Urdu: "بہترین", "اچھا", "اوسط", "قابلِ بہتری", "کمزور"
-- Hindi: "उत्कृष्ट", "अच्छा", "औसत", "सुधार योग्य", "कमज़ोर"
-- English: "Excellent", "Good", "Average", "Fair", "Poor"
+Every level value must be the preferredLanguage translation of exactly one of these five fixed rating categories: Excellent, Good, Average, Fair, or Poor. These English category names are semantic references for selecting the rating only; never output their English text unless preferredLanguage is English. Never use descriptive phrases such as "strong performance", "adequate performance", or "needs improvement" as a level value.
 
-Scores must remain JSON numbers because the schema requires integers. The application UI can format numeric digits according to the selected language.
+Before returning JSON, validate every level field against preferredLanguage. If preferredLanguage is not English, replace any English rating word with its natural, concise equivalent in preferredLanguage. Do not hardcode a language-specific mapping; dynamically use the correct equivalent for the supplied preferredLanguage.
+
+Scores and ISO language codes must remain JSON numbers and codes because the schema requires them. The numeric score is language-neutral; all human-readable descriptive text, labels, feedback, strengths, and improvements must follow preferredLanguage.
 
 ==================================================
 LANGUAGE DETECTION RULES
@@ -502,7 +543,19 @@ Analyze language detection from USER messages only.
   - detected: ["en"]
 - If the user uses Urdu, Hindi, and English meaningfully, include both non-primary languages in detected.
 - Do not detect a language only from names, cricket terms, single borrowed words, or assistant messages.
-- The preferred language controls report output. Language detection does not change the report language.
+- Language detection is independent from report generation. Determine languages.primary and languages.detected only from user messages, but never use them to override preferredLanguage for generated analysis content.
+
+==================================================
+TOPIC AND EVIDENCE RULES
+==================================================
+
+Determine the actual topic from what the USER discussed. The selected topic is context only; it is never proof that the user discussed that topic.
+
+- If the conversation follows the selected topic, analyze that topic.
+- If the user meaningfully changes or narrows the topic, analyze the topic actually discussed.
+- Every title, summary, score, strength, improvement, and feedback statement must be grounded in the user's real statements and be relevant to that actual topic.
+- Do not produce generic coaching, praise, criticism, or recommendations that could apply to an unrelated conversation.
+- Do not infer knowledge, opinions, experiences, or weaknesses from the selected topic, assistant messages, or missing user content.
 
 ==================================================
 USER-ONLY ANALYSIS RULES
@@ -525,7 +578,7 @@ Only assistantPerformance evaluates the assistant. It is an internal developer f
 
 Evaluate the user fairly using only demonstrated communication:
 - clarity of ideas and questions
-- relevant participation
+- relevant participation in the actual topic discussed
 - ability to explain opinions or experiences
 - grammar and readability
 - detail when detail was appropriate
@@ -546,6 +599,7 @@ Write feedback that feels warm, polished, respectful, and professional.
 
 - Speak directly to the user naturally.
 - Make each feedback statement specific to what the user actually said.
+- Keep every strength, improvement, and feedback statement relevant to the actual topic discussed and the user's demonstrated communication in that topic.
 - Use encouraging, clear, and constructive language.
 - Improvements must be practical and respectful.
 - Do not use robotic, generic, harsh, awkward, or template-like wording.
@@ -558,48 +612,52 @@ FIELD REQUIREMENTS
 ==================================================
 
 conversationTitle:
-- Describe the topic discussed by the user.
+- Describe only the actual topic discussed by the user, not merely the selected topic.
 - Minimum 3 words, maximum 8 words.
-- Must be in the preferred language.
+- Must be in preferredLanguage.
 
 summary:
 - Summarize only the user's ideas, questions, opinions, interests, or experiences.
 - Do not summarize the assistant's advice or answers.
 - Write 50 to 60 words only when sufficient user content exists.
-- Must be in the preferred language.
+- Must focus on the actual topic discussed and be in preferredLanguage.
 
 communicationSkill:
 - Evaluate how clearly the user expressed thoughts, questions, and ideas.
-- Consider clarity, relevance, and understandable expression.
+- Consider clarity, relevance to the actual topic, and understandable expression.
+- Base feedback on specific demonstrated communication, not generic speaking advice.
 
 engagement:
 - Evaluate the user's participation only.
-- Consider relevant questions, opinions, examples, and continued involvement.
+- Consider relevant questions, opinions, examples, and continued involvement in the actual topic.
 
 grammar:
 - Evaluate grammar, sentence construction, and readability in user messages only.
 - Be kind and practical.
 - Do not over-penalize informal speech or transcription issues.
+- Assess only errors actually visible in the user's language; do not infer grammar problems from topic knowledge or brevity.
 
 strengths:
 - Include 1 to 3 strengths demonstrated by the user.
-- Every item must be evidence-based.
+- Every item must be evidence-based and relevant to the actual topic and conversation.
 - Each item must be a concise, polished statement.
 
 improvements:
 - Include 1 to 3 improvements only when genuinely supported by the user's messages.
-- Give useful next-step advice, such as adding context, organizing a question, or explaining an idea more fully.
+- Give useful next-step advice that addresses a demonstrated weakness in this topic and conversation, such as adding relevant context, organizing a question, or explaining an idea more fully.
 - Never use insulting or discouraging wording.
+- If no topic-relevant improvement is supported by the messages, return an empty items array rather than inventing one.
 
 overallConversation:
 - Evaluate the user's overall participation and communication only.
 - It is not a score for the assistant or the complete combined conversation.
+- Keep the evaluation tied to the actual topic and demonstrated user contribution.
 
 assistantPerformance:
 - Evaluate only the assistant for internal developer use.
-- Consider topic relevance, natural responses, appropriate redirection, and helpfulness.
+- Consider relevance to the actual topic, natural responses, appropriate redirection, and helpfulness.
 - Do not judge factual correctness.
-- This feedback must still be written in the preferred language.
+- This feedback must still be written in preferredLanguage.
 
 ==================================================
 TEXT LIMITS
@@ -615,14 +673,18 @@ TEXT LIMITS
 SCORING
 ==================================================
 
-All scores must be integers from 0 to 100.
+All score values must be JSON integers from 0 to 100. Assess communicationSkill, engagement, grammar, and overallConversation separately and strictly from the user's demonstrated performance in the actual messages.
 
-Use these score ranges, but translate the level label into the preferred language:
-- 90 to 100: Excellent
-- 75 to 89: Good
-- 60 to 74: Average
-- 40 to 59: Fair
-- 0 to 39: Poor
+Be completely truthful. Do not default to 70–80, inflate scores to be encouraging, or give the same score to every field. If the user's demonstrated performance in a skill is poor, assign the genuinely low score it deserves; for performance around 20%, use a score around 20. If the demonstrated performance is excellent, assign a score in the excellent range. If evidence is insufficient, return the schema's insufficient-evidence values instead of an arbitrary score.
+
+Use these exact score-to-level mappings for every level field:
+- 90 to 100: the preferredLanguage translation of "Excellent" only.
+- 75 to 89: the preferredLanguage translation of "Good" only.
+- 60 to 74: the preferredLanguage translation of "Average" only.
+- 40 to 59: the preferredLanguage translation of "Fair" only.
+- 0 to 39: the preferredLanguage translation of "Poor" only.
+
+The level must match the numeric score range exactly. Return only the concise preferredLanguage equivalent of the assigned rating category in a level field—never English text when preferredLanguage is another language, and never an alternative wording, explanation, or performance phrase. Put specific details only in the feedback field, written in preferredLanguage.
 
 Return this exact JSON schema:
 {
@@ -679,10 +741,10 @@ Return this exact JSON schema:
     }
 }`;
 
-            const userPrompt = `Analyze this session.
+            const userPrompt = `Analyze this session using the actual topic and the user's actual messages as the sole evidence for user-facing analysis.
 
-Preferred Language: ${conversationData.preferredLanguage}
-Selected Topic: ${conversationData.selectedTopic}
+Preferred Language (mandatory for all generated analysis content): ${conversationData.preferredLanguage}
+Selected Topic (context only; do not assume it was discussed): ${conversationData.selectedTopic}
 
 USER MESSAGES — use these as the ONLY source for all user-facing insights:
 ${conversationData.userMessages.length
