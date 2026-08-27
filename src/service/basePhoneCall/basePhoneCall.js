@@ -64,7 +64,7 @@ class BasePhoneCall {
         if (session?.fullDuplex && msg.media?.payload) {
           session.fullDuplex.processUserAudio(msg.media.payload);
         } else {
-          this.logger?.warn(`[BasePhoneCall] Media received but no active session for ${clientId}`);
+          // this.logger?.warn(`[BasePhoneCall] Media received but no active session for ${clientId}`);
         }
         break;
       case 'sync_timer':
@@ -75,7 +75,7 @@ class BasePhoneCall {
         break;
       case 'stop':
         this.logger?.info(`[BasePhoneCall] Stop event received from ${clientId}`);
-        this._cleanup(clientId);
+        await this._cleanup(clientId);
         break;
       default:
         this.logger?.warn(`[BasePhoneCall] Unknown event type: ${msg.event} from ${clientId}`);
@@ -177,7 +177,7 @@ class BasePhoneCall {
       });
 
       // Clean up after sending expiration message
-      this._cleanup(clientId);
+      await this._cleanup(clientId);
     } catch (error) {
       this.logger?.error(`[BasePhoneCall] Error handling timer termination for ${clientId}:`, error.message);
     }
@@ -330,7 +330,7 @@ class BasePhoneCall {
     }
   }
 
-  _cleanup(clientId) {
+  async _cleanup(clientId) {
     const session = this.sessions.get(clientId);
     if (!session || session.closed) {
       this.logger?.debug(`[BasePhoneCall] Cleanup skipped - session ${clientId} already closed or not found`);
@@ -342,7 +342,7 @@ class BasePhoneCall {
 
     try {
       if (session.sessionTracker && session.isInitialized) {
-        session.sessionTracker.finalize();
+        await session.sessionTracker.finalize();
       }
 
       closeAudioStream(session.clientId);

@@ -1,3 +1,5 @@
+import { normalizeOpenAITokenUsage } from './normalizeOpenAITokenUsage.js';
+
 const OPENAI_MODEL = 'gpt-4o-mini';
 
 export function isEnglishLanguage(language) {
@@ -73,13 +75,7 @@ Topic: ${topic}`;
 
         const data = await response.json();
         const result = JSON.parse(data.choices[0].message.content);
-        const tokenUsage = data.usage
-            ? {
-                input_tokens: data.usage.prompt_tokens || 0,
-                output_tokens: data.usage.completion_tokens || 0,
-                total_tokens: data.usage.total_tokens || 0
-            }
-            : null;
+        const tokenUsage = normalizeOpenAITokenUsage(data.usage);
 
         return {
             name: result.name || name,

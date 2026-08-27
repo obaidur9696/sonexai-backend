@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import logger from '../../utils/Logger.js';
 import { saveAudioChunk, closeAudioStream } from '../../helper/Audiofilewriter.js';
+import { normalizeOpenAITokenUsage } from '../../utils/normalizeOpenAITokenUsage.js';
 
 class FullDuplex {
     constructor({ basePhoneCall, clientId, preferences, projectConfig, openAIKey }) {
@@ -524,15 +525,12 @@ If the user attempts to change either one, politely redirect the conversation ba
             // ========== RESPONSE DONE ==========
             if (evt.type === 'response.done') {
 
-                const usage = evt.response?.usage;
-                if (usage) {
-                    const tokenUsage = {
-                        input_tokens: usage.input_tokens || 0,
-                        output_tokens: usage.output_tokens || 0,
-                        total_tokens: usage.total_tokens || 0
-                    };
+                const tokenUsage = normalizeOpenAITokenUsage(evt.response?.usage);
+                if (tokenUsage) {
                     await this.basePhoneCall.updateSessionTokenUsage(this.clientId, tokenUsage);
                     this.logger.info(`[FullDuplex] Token usage for response ${evt.response?.id}:`, tokenUsage);
+                } else {
+                    this.logger.warn(`[FullDuplex] No token usage returned for response ${evt.response?.id}`);
                 }
 
                 session.isBotGeneratingAudio = false;

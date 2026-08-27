@@ -3,6 +3,7 @@ import { User } from '../../models/user.models.js';
 import { Project } from '../../models/project.models.js';
 import { v4 as uuidv4 } from 'uuid';
 import { isEnglishLanguage, transliterateText } from '../../utils/transliterateText.js';
+import { normalizeOpenAITokenUsage } from '../../utils/normalizeOpenAITokenUsage.js';
 
 
 const OPENAI_MODEL = 'gpt-4o-mini';
@@ -17,8 +18,18 @@ class SessionTracker {
         this.logger = logger;
         this.sessionDoc = null; // contain mongoose document of the session
         this.sessionData = {}; // plain json object of the session data
+        this._sessionWriteQueue = Promise.resolve();
     }
 
+    _enqueueSessionWrite(operation) {
+        const queuedOperation = this._sessionWriteQueue.then(operation);
+
+        // Keep the queue usable after a failed write while returning the original
+        // rejection to the caller that initiated it.
+        this._sessionWriteQueue = queuedOperation.catch(() => undefined);
+
+        return queuedOperation;
+    }
 
     async initialize() {
         try {
@@ -142,26 +153,28 @@ class SessionTracker {
     }
 
     async activate() {
-        try {
-            if (!this.sessionDoc) {
-                this.sessionDoc = await Session.findOne({ sessionId: this.sessionId });
-            }
+        return this._enqueueSessionWrite(async () => {
+            try {
+                if (!this.sessionDoc) {
+                    this.sessionDoc = await Session.findOne({ sessionId: this.sessionId });
+                }
 
-            if (this.sessionDoc && this.sessionDoc.status === 'created') {
-                this.sessionDoc.status = 'active';
-                await this.sessionDoc.save();
-                this.logger.info(`[SessionTracker] Session activated: ${this.sessionId}`);
-            }
+                if (this.sessionDoc && this.sessionDoc.status === 'created') {
+                    this.sessionDoc.status = 'active';
+                    await this.sessionDoc.save();
+                    this.logger.info(`[SessionTracker] Session activated: ${this.sessionId}`);
+                }
 
-            if (this.sessionDoc?.status === 'active') {
-                return this._getActiveSessionPayload();
-            }
+                if (this.sessionDoc?.status === 'active') {
+                    return this._getActiveSessionPayload();
+                }
 
-            return null;
-        } catch (error) {
-            this.logger.error(`[SessionTracker] Activate error:`, error.message);
-            return null;
-        }
+                return null;
+            } catch (error) {
+                this.logger.error(`[SessionTracker] Activate error:`, error.message);
+                return null;
+            }
+        });
     }
 
     async _applyTransliteratedPreferences(session) {
@@ -218,23 +231,25 @@ class SessionTracker {
     }
 
     async recordMessage(sender, text) {
-        try {
-            if (!this.sessionDoc) {
-                this.sessionDoc = await Session.findOne({ sessionId: this.sessionId });
-            }
+        return this._enqueueSessionWrite(async () => {
+            try {
+                if (!this.sessionDoc) {
+                    this.sessionDoc = await Session.findOne({ sessionId: this.sessionId });
+                }
 
-            if (this.sessionDoc && this.sessionDoc.status === 'active') {
-                this.sessionDoc.messages.push({
-                    sender: sender,
-                    text: text,
-                    timestamp: new Date()
-                });
-                await this.sessionDoc.save();
-                this.logger.debug(`[SessionTracker] Message saved: ${sender} -> ${text}`);
+                if (this.sessionDoc && this.sessionDoc.status === 'active') {
+                    this.sessionDoc.messages.push({
+                        sender: sender,
+                        text: text,
+                        timestamp: new Date()
+                    });
+                    await this.sessionDoc.save();
+                    this.logger.debug(`[SessionTracker] Message saved: ${sender} -> ${text}`);
+                }
+            } catch (error) {
+                this.logger.error(`[SessionTracker] Record message error:`, error.message);
             }
-        } catch (error) {
-            this.logger.error(`[SessionTracker] Record message error:`, error.message);
-        }
+        });
     }
 
     /**
@@ -242,47 +257,62 @@ class SessionTracker {
  * @param {Object} tokenUsage - { input_tokens, output_tokens, total_tokens }
  */
     async updateTokenUsage(tokenUsage) {
+        const normalizedTokenUsage = normalizeOpenAITokenUsage(tokenUsage);
+        if (!normalizedTokenUsage) {
+            this.logger.warn(`[SessionTracker] Token usage skipped for session ${this.sessionId}: invalid usage payload`);
+            return;
+        }
+
         try {
-            if (!this.sessionDoc) {
-                this.sessionDoc = await Session.findOne({ sessionId: this.sessionId });
-            }
-
-            if (!this.sessionDoc) return;
-
-            // Initialize tokenUsage if not exists
-            if (!this.sessionDoc.tokenUsage) {
-                this.sessionDoc.tokenUsage = {
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    total_tokens: 0
-                };
-            }
-
-            // Add new token usage to existing
-            this.sessionDoc.tokenUsage.input_tokens += tokenUsage.input_tokens || 0;
-            this.sessionDoc.tokenUsage.output_tokens += tokenUsage.output_tokens || 0;
-            this.sessionDoc.tokenUsage.total_tokens += tokenUsage.total_tokens || 0;
-
-            await this.sessionDoc.save();
-
+            await this._enqueueSessionWrite(() => this._persistTokenUsage(normalizedTokenUsage));
             this.logger.info(
                 `[SessionTracker] Token usage updated for session ${this.sessionId}: ` +
-                `Input: ${tokenUsage.input_tokens || 0}, Output: ${tokenUsage.output_tokens || 0}, Total: ${tokenUsage.total_tokens || 0}`
+                `Input: ${normalizedTokenUsage.input_tokens}, Output: ${normalizedTokenUsage.output_tokens}, Total: ${normalizedTokenUsage.total_tokens}`
             );
         } catch (error) {
             this.logger.error(`[SessionTracker] Update token usage error:`, error.message);
         }
     }
 
+    async _persistTokenUsage(tokenUsage) {
+        const normalizedTokenUsage = normalizeOpenAITokenUsage(tokenUsage);
+        if (!normalizedTokenUsage) return false;
+
+        if (!this.sessionDoc) {
+            this.sessionDoc = await Session.findOne({ sessionId: this.sessionId });
+        }
+
+        if (!this.sessionDoc) return false;
+
+        // Initialize tokenUsage if not exists
+        if (!this.sessionDoc.tokenUsage) {
+            this.sessionDoc.tokenUsage = {
+                input_tokens: 0,
+                output_tokens: 0,
+                total_tokens: 0
+            };
+        }
+
+        // Add new token usage to existing
+        this.sessionDoc.tokenUsage.input_tokens += normalizedTokenUsage.input_tokens;
+        this.sessionDoc.tokenUsage.output_tokens += normalizedTokenUsage.output_tokens;
+        this.sessionDoc.tokenUsage.total_tokens += normalizedTokenUsage.total_tokens;
+
+        await this.sessionDoc.save();
+        return true;
+    }
+
     async finalize() {
-        try {
-            if (!this.sessionDoc) {
-                this.sessionDoc = await Session.findOne({ sessionId: this.sessionId });
-            }
-            if (this.sessionDoc.status === 'ended') {
-                this.logger.warn(`Session ${this.sessionId} already ended`);
-                return;
-            }
+        return this._enqueueSessionWrite(async () => {
+            try {
+                if (!this.sessionDoc) {
+                    this.sessionDoc = await Session.findOne({ sessionId: this.sessionId });
+                }
+                if (!this.sessionDoc) return;
+                if (this.sessionDoc.status === 'ended') {
+                    this.logger.warn(`Session ${this.sessionId} already ended`);
+                    return;
+                }
 
             const minUserWords = this.sessionData.minUserWordsForAnalysis || 30;
             const eligibility = await this._shouldAnalyzeConversation(
@@ -353,9 +383,10 @@ class SessionTracker {
             // Clear in-memory session state
             this.sessionData = null;
             this.sessionDoc = null;
-        } catch (error) {
-            this.logger.error(`[SessionTracker] Finalize error:`, error.message);
-        }
+            } catch (error) {
+                this.logger.error(`[SessionTracker] Finalize error:`, error.message);
+            }
+        });
     }
 
     // Helper method to get session document
@@ -779,12 +810,23 @@ ${conversationData.assistantMessages.length
             }
 
             const data = await response.json();
-            // ✅ Save token usage (function already exists)
-            await this.updateTokenUsage({
-                input_tokens: data.usage?.prompt_tokens || 0,
-                output_tokens: data.usage?.completion_tokens || 0,
-                total_tokens: data.usage?.total_tokens || 0
-            });
+            // This method runs inside finalize's write queue, so write directly
+            // instead of enqueueing behind the in-progress finalization.
+            const tokenUsage = normalizeOpenAITokenUsage(data.usage);
+
+            if (tokenUsage) {
+                try {
+                    await this._persistTokenUsage(tokenUsage);
+                    this.logger.info(
+                        `[SessionTracker] Analysis token usage updated for session ${this.sessionId}: ` +
+                        `Input: ${tokenUsage.input_tokens}, Output: ${tokenUsage.output_tokens}, Total: ${tokenUsage.total_tokens}`
+                    );
+                } catch (error) {
+                    this.logger.error(`[SessionTracker] Analysis token usage error:`, error.message);
+                }
+            } else {
+                this.logger.warn(`[SessionTracker] No token usage returned for analysis session ${this.sessionId}`);
+            }
 
             const rawInsights = JSON.parse(data.choices[0].message.content);
 
