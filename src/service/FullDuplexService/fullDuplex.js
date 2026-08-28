@@ -81,7 +81,8 @@ class FullDuplex {
             userChunks: [],                  // Store user transcription chunks
             canProcessUserAudio: false,
 
-            isInterrupted: false
+            isInterrupted: false,
+            isAudioResponseComplete: false
         };
     }
 
@@ -443,6 +444,7 @@ If the user attempts to change either one, politely redirect the conversation ba
                 session.currentResponseId = evt.response?.id;
                 session.isBotTranscribing = false;
                 session.botSentence = ''; // Reset bot sentence for new response
+                session.isAudioResponseComplete = false;
                 return;
             }
 
@@ -518,12 +520,16 @@ If the user attempts to change either one, politely redirect the conversation ba
             if (evt.type === 'response.output_audio.delta') {
                 if (!evt.delta) return;
                 const chunk = Buffer.from(evt.delta, 'base64');
+                session.isAudioResponseComplete = false;
                 session.botAudioQueue.push(chunk);
                 return;
             }
 
             // ========== RESPONSE DONE ==========
             if (evt.type === 'response.done') {
+                // Let the output pipeline flush the last resampler/frame samples
+                // without waiting for database token-usage persistence.
+                session.isAudioResponseComplete = true;
 
                 const tokenUsage = normalizeOpenAITokenUsage(evt.response?.usage);
                 if (tokenUsage) {
@@ -587,6 +593,11 @@ If the user attempts to change either one, politely redirect the conversation ba
                 if (session.isBotSpeakingToClient) {
                     session.isBotSpeakingToClient = false;
                 }
+
+                if (session.isAudioResponseComplete) {
+                    session.isAudioResponseComplete = false;
+                    this.basePhoneCall.sendAudioEnd(this.clientId);
+                }
                 return;
             }
 
@@ -631,6 +642,8 @@ If the user attempts to change either one, politely redirect the conversation ba
 
         // 3. Clear audio queue
         session.botAudioQueue = [];
+        session.isAudioResponseComplete = false;
+        this.basePhoneCall.clearAudio(this.clientId);
     }
 
     _cleanupSession() {
@@ -657,6 +670,7 @@ If the user attempts to change either one, politely redirect the conversation ba
         session.isBotSpeakingToClient = false;
         session.isBotGeneratingAudio = false;
         session.isInterrupted = false;
+        session.isAudioResponseComplete = false;
 
         // 🧹 clear queue
         session.botAudioQueue = [];

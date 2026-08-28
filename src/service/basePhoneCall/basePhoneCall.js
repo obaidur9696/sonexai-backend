@@ -205,6 +205,20 @@ class BasePhoneCall {
     }
   }
 
+  sendAudioEnd(clientId) {
+    const session = this.sessions.get(clientId);
+    if (!session) return;
+
+    this._send(session, { event: 'media_end' });
+  }
+
+  clearAudio(clientId) {
+    const session = this.sessions.get(clientId);
+    if (!session) return;
+
+    this._send(session, { event: 'media_clear' });
+  }
+
   async sendBotReady(clientId) {
     const session = this.sessions.get(clientId);
     if (!session) {

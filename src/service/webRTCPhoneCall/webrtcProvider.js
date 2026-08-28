@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import wrtc from 'wrtc';
 import { User } from '../../models/user.models.js';
 import logger from '../../utils/Logger.js';
-import { saveAudioChunk, closeAudioStream } from '../../helper/Audiofilewriter.js';
+import { closeAudioStream } from '../../helper/Audiofilewriter.js';
 
 
 const { RTCPeerConnection, RTCSessionDescription, RTCIceCandidate } = wrtc;
@@ -13,6 +13,31 @@ const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
 ];
+
+const OPENAI_OUTPUT_SAMPLE_RATE = 24000;
+const WEBRTC_SAMPLE_RATE = 48000;
+const WEBRTC_FRAME_SIZE = 480; // 10 ms at 48 kHz mono
+const RESAMPLER_CONTEXT_SAMPLES = 8;
+
+// The odd phase of a 2x, windowed-sinc interpolator. The even phase is the
+// original source sample, so it remains bit-exact at the original sample times.
+const UPSAMPLE_ODD_PHASE_COEFFICIENTS = (() => {
+  const coefficients = [];
+
+  for (let relativeSample = -7; relativeSample <= 8; relativeSample++) {
+    const distance = 0.5 - relativeSample;
+    const sinc = Math.sin(Math.PI * distance) / (Math.PI * distance);
+    const normalizedDistance = Math.abs(distance) / 8.5;
+    const window = 0.42 +
+      (0.5 * Math.cos(Math.PI * normalizedDistance)) +
+      (0.08 * Math.cos(2 * Math.PI * normalizedDistance));
+
+    coefficients.push(sinc * window);
+  }
+
+  const gain = coefficients.reduce((sum, coefficient) => sum + coefficient, 0);
+  return coefficients.map((coefficient) => coefficient / gain);
+})();
 
 class WebRTCProvider {
   constructor({ botWsUrl } = {}) {
@@ -269,6 +294,14 @@ class WebRTCProvider {
         this._handleBotAudioToClient(session, msg.media);
       }
 
+      if (msg.event === 'media_end') {
+        this._flushBotAudioToClient(session);
+      }
+
+      if (msg.event === 'media_clear') {
+        this._clearBotAudioToClient(session);
+      }
+
       if (msg.event === 'transcript_start') {
         this._send(session.ws, {
           type: 'transcript_start',
@@ -333,42 +366,26 @@ class WebRTCProvider {
   _handleBotAudioToClient(session, media) {
     if (!session.audioSource || !media?.payload) return;
 
-    // 1. Base64 → Buffer
     const inputBuffer = Buffer.from(media.payload, 'base64');
-
-    // 2. Validate PCM16
     if (inputBuffer.length % 2 !== 0) {
-      // console.log('Invalid PCM buffer length');
+      this.logger?.warn('Discarding malformed bot PCM audio', { roomId: session.roomId });
       return;
     }
 
-    // 3. Buffer → Int16Array (24kHz mono)
     const inputSamples = new Int16Array(
       inputBuffer.buffer,
       inputBuffer.byteOffset,
       inputBuffer.length / 2
     );
+    const inputSampleRate = Number(media.sampleRate) || OPENAI_OUTPUT_SAMPLE_RATE;
+    const outputSamples = this._resampleBotAudio(session, inputSamples, inputSampleRate);
 
-    // 4. Upsample 24k → 48k
-    const upsampled = this._upsampleBuffer(inputSamples, 24000, 48000);
-
-    // 5. Convert safely to Node Buffer
-    const pcmBuffer = Buffer.from(
-      upsampled.buffer,
-      upsampled.byteOffset,
-      upsampled.byteLength
-    );
-
-    // 6. Save as WAV (debugging)
-    // saveAudioChunk(session.roomId, pcmBuffer);
-
-    // 7. Send in proper 10ms frames (VERY IMPORTANT)
-    this._pushToWebRTC(session, upsampled);
+    if (outputSamples.length > 0) {
+      this._pushToWebRTC(session, outputSamples);
+    }
   }
 
   _pushToWebRTC(session, samples) {
-    const FRAME_SIZE = 480; // 10ms @ 48kHz mono
-
     if (!session._audioBuffer) {
       session._audioBuffer = new Int16Array(0);
     }
@@ -379,20 +396,117 @@ class WebRTCProvider {
 
     let offset = 0;
 
-    while (combined.length - offset >= FRAME_SIZE) {
-      const frame = combined.slice(offset, offset + FRAME_SIZE);
-      session.audioSource.onData({
-        samples: frame,
-        sampleRate: 48000,
-        bitsPerSample: 16,
-        channelCount: 1,
-        numberOfFrames: FRAME_SIZE  // ← ADD THIS
-      });
-
-      offset += FRAME_SIZE;
+    while (combined.length - offset >= WEBRTC_FRAME_SIZE) {
+      this._sendWebRTCAudioFrame(
+        session,
+        combined.slice(offset, offset + WEBRTC_FRAME_SIZE)
+      );
+      offset += WEBRTC_FRAME_SIZE;
     }
 
     session._audioBuffer = combined.slice(offset);
+  }
+
+  _sendWebRTCAudioFrame(session, samples) {
+    if (!session.audioSource) return;
+
+    session.audioSource.onData({
+      samples,
+      sampleRate: WEBRTC_SAMPLE_RATE,
+      bitsPerSample: 16,
+      channelCount: 1,
+      numberOfFrames: WEBRTC_FRAME_SIZE
+    });
+  }
+
+  _resampleBotAudio(session, input, inputRate) {
+    if (!input || input.length === 0) return new Int16Array(0);
+    if (inputRate === WEBRTC_SAMPLE_RATE) return input;
+
+    if (inputRate !== OPENAI_OUTPUT_SAMPLE_RATE) {
+      this.logger?.warn('Discarding bot audio with an unsupported sample rate', {
+        roomId: session.roomId,
+        inputRate
+      });
+      return new Int16Array(0);
+    }
+
+    return this._upsample24kTo48k(session, input);
+  }
+
+  _upsample24kTo48k(session, input) {
+    const state = this._getOutputResamplerState(session);
+    const combined = new Int16Array(state.pending.length + input.length);
+    combined.set(state.pending, 0);
+    combined.set(input, state.pending.length);
+
+    const output = [];
+    let offset = 0;
+
+    // Wait for eight source samples of look-ahead. This removes chunk-boundary
+    // artifacts while adding less than 0.4 ms of resampler latency.
+    while (combined.length - offset > RESAMPLER_CONTEXT_SAMPLES) {
+      const current = combined[offset];
+      let interpolated = 0;
+
+      for (let coefficientIndex = 0; coefficientIndex < UPSAMPLE_ODD_PHASE_COEFFICIENTS.length; coefficientIndex++) {
+        const relativeSample = coefficientIndex - 7;
+        const sourceSample = relativeSample < 0
+          ? state.history[state.history.length + relativeSample]
+          : combined[offset + relativeSample];
+
+        interpolated += (sourceSample || 0) * UPSAMPLE_ODD_PHASE_COEFFICIENTS[coefficientIndex];
+      }
+
+      output.push(current, this._toPcm16(interpolated));
+      state.history.copyWithin(0, 1);
+      state.history[state.history.length - 1] = current;
+      offset++;
+    }
+
+    state.pending = combined.slice(offset);
+    state.hasAudio = state.hasAudio || input.length > 0;
+    return Int16Array.from(output);
+  }
+
+  _getOutputResamplerState(session) {
+    if (!session._outputResampler) {
+      session._outputResampler = {
+        history: new Int16Array(RESAMPLER_CONTEXT_SAMPLES),
+        pending: new Int16Array(0),
+        hasAudio: false
+      };
+    }
+
+    return session._outputResampler;
+  }
+
+  _flushBotAudioToClient(session) {
+    const state = session._outputResampler;
+    if (state?.hasAudio && state.pending.length > 0) {
+      const tail = this._upsample24kTo48k(
+        session,
+        new Int16Array(RESAMPLER_CONTEXT_SAMPLES)
+      );
+      this._pushToWebRTC(session, tail);
+    }
+
+    if (session._audioBuffer?.length > 0) {
+      const finalFrame = new Int16Array(WEBRTC_FRAME_SIZE);
+      finalFrame.set(session._audioBuffer);
+      this._sendWebRTCAudioFrame(session, finalFrame);
+    }
+
+    this._clearBotAudioToClient(session);
+  }
+
+  _clearBotAudioToClient(session) {
+    session._audioBuffer = new Int16Array(0);
+    session._outputResampler = null;
+  }
+
+  _toPcm16(sample) {
+    return Math.max(-32768, Math.min(32767, Math.round(sample)));
   }
   // High-quality downsampling (PCM16)
   _downsampleBuffer(input, inputRate = 48000, outputRate = 24000) {
@@ -424,31 +538,12 @@ class WebRTCProvider {
     return output;
   }
 
-  // High-quality upsampling (linear interpolation)
-  _upsampleBuffer(input, inputRate = 24000, outputRate = 48000) {
-    if (!input || input.length === 0) return new Int16Array(0);
-    if (inputRate === outputRate) return input;
-
-    const ratio = outputRate / inputRate;
-    const outputLength = Math.round(input.length * ratio);
-    const output = new Int16Array(outputLength);
-
-    for (let i = 0; i < outputLength; i++) {
-      const index = i / ratio;
-      const i0 = Math.floor(index);
-      const i1 = Math.min(i0 + 1, input.length - 1);
-      const t = index - i0;
-
-      output[i] = (1 - t) * input[i0] + t * input[i1];
-    }
-
-    return output;
-  }
-
   _teardownPeer(session) {
     try { session.audioSink?.stop(); } catch { }
     try { session.audioTrack?.stop(); } catch { }
     try { session.pc?.close(); } catch { }
+
+    this._clearBotAudioToClient(session);
 
     session.audioSink = null;
     session.audioSource = null;
