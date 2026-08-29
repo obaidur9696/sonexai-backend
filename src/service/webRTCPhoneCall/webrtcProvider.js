@@ -94,6 +94,9 @@ class WebRTCProvider {
           case 'session_timer_termination':
             this._handleSessionTimerTermination(session, msg);
             break;
+          case 'bot_finished_frontendside':
+            this._handleBotFinishedFrontendSide(session, msg);
+            break;
 
 
 
@@ -179,6 +182,19 @@ class WebRTCProvider {
   _handleLeave(session) {
     this.logger?.info('Client leaving room', { roomId: session.roomId });
     this._cleanup(session);
+  }
+
+  _handleBotFinishedFrontendSide(session, msg) {
+
+    if (session.botWs?.readyState === WebSocket.OPEN) {
+      session.botWs.send(JSON.stringify({
+        event: 'bot_finished_frontendside',
+        roomId: msg.roomId || session.roomId,
+        payload: {
+          sessionId: msg.payload?.sessionId
+        }
+      }));
+    }
   }
 
   async _handleOffer(session, offer) {
@@ -336,6 +352,18 @@ class WebRTCProvider {
         this.logger?.warn('Session expired message received from bot, forwarding to client', { message: msg.message, roomId: session.roomId });
         this._send(session.ws, {
           type: 'session_expired',
+          message: msg.message
+        });
+      }
+
+      if (msg.event === 'session_ended') {
+        this.logger?.info('Session-ended message received from bot, forwarding to client', {
+          reason: msg.reason,
+          roomId: session.roomId
+        });
+        this._send(session.ws, {
+          type: 'session_ended',
+          reason: msg.reason,
           message: msg.message
         });
       }

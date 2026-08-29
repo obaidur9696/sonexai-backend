@@ -5,6 +5,18 @@ import logger from '../../utils/Logger.js';
 import { saveAudioChunk, closeAudioStream } from '../../helper/Audiofilewriter.js';
 import SessionTracker from '../sessionTracker/sessionTracker.js';
 
+const maxCountSilenceTime = 3;
+const noAnswerMessages = [
+  'Whenever you are ready, I would be glad to hear your thoughts.',
+  'Take your time; I am here whenever you feel ready to continue.',
+  'There is no rush. Would you like to share what is on your mind?',
+  'I would love to hear your perspective whenever you are ready.',
+  'Please take a gentle moment; I am listening whenever you wish to continue.',
+  'Whenever it feels comfortable, I would be happy to continue our conversation with you.',
+  'I am still here with you. Would you like to add anything?',
+  'Your thoughts matter; whenever you are ready, I am here to listen.'
+];
+
 class BasePhoneCall {
   constructor() {
     this.sessions = new Map();
@@ -23,7 +35,18 @@ class BasePhoneCall {
     const clientId = uuidv4();
     this.logger?.info(`[BasePhoneCall] Client connected: ${clientId}`);
     
-    const session = { clientId, ws, closed: false };
+    const session = {
+      clientId,
+      ws,
+      closed: false,
+      noAnswerTimeout: null,
+      noAnswerTimeoutSeconds: null,
+      silencePromptCount: 0,
+      awaitingSilencePromptPlayback: false,
+      isUserSpeaking: false,
+      ignoreNextBotFinishedEvent: false,
+      isEndingForNoAnswer: false
+    };
     this.sessions.set(clientId, session);
     
     ws.on('message', (raw) => this._onMessage(clientId, raw));
@@ -73,6 +96,9 @@ class BasePhoneCall {
       case 'session_timer_termination':
         await this._handleSessionTimerTermination(clientId, msg);
         break;
+      case 'bot_finished_frontendside':
+        await this._handleBotFinishedFrontendSide(clientId, msg);
+        break;
       case 'stop':
         this.logger?.info(`[BasePhoneCall] Stop event received from ${clientId}`);
         await this._cleanup(clientId);
@@ -115,11 +141,18 @@ class BasePhoneCall {
       }
 
       session.sessionId = initialized?.session?.sessionId;
+      session.projectConfig = initialized.projectConfig || {};
+
+      const noAnswerTimeoutSeconds = Number(session.projectConfig.noAnswerTimeoutSeconds);
+      session.noAnswerTimeoutSeconds = Number.isFinite(noAnswerTimeoutSeconds) && noAnswerTimeoutSeconds > 0
+        ? noAnswerTimeoutSeconds
+        : null;
+
       session.fullDuplex = new FullDuplex({
         basePhoneCall: this,
         clientId: clientId,
         preferences: preferences,
-        projectConfig: initialized.projectConfig,
+        projectConfig: session.projectConfig,
         openAIKey: process.env.OPENAI_API_KEY
       });
 
@@ -184,6 +217,157 @@ class BasePhoneCall {
   }
 
   // ─── Outbound to WebRTCProvider ────────────────────────────────────────────
+
+  async _handleBotFinishedFrontendSide(clientId, msg) {
+    const session = this.sessions.get(clientId);
+    if (!session || session.closed || session.isEndingForNoAnswer) return;
+
+    const eventSessionId = msg.payload?.sessionId;
+    if (eventSessionId && session.sessionId && eventSessionId !== session.sessionId) {
+      this.logger?.warn(`[BasePhoneCall] Ignoring bot-finished event with a mismatched session ID for ${clientId}`);
+      return;
+    }
+
+    if (session.isUserSpeaking || session.ignoreNextBotFinishedEvent) {
+      this.logger?.debug(`[BasePhoneCall] Ignoring bot-finished event while user speech is active for ${clientId}`);
+      return;
+    }
+
+    if (session.awaitingSilencePromptPlayback) {
+      session.awaitingSilencePromptPlayback = false;
+
+      if (session.silencePromptCount >= maxCountSilenceTime) {
+        await this._endForNoAnswer(clientId);
+        return;
+      }
+    }
+
+    this._startNoAnswerTimer(clientId);
+  }
+
+  handleUserStartedSpeaking(clientId) {
+    const session = this.sessions.get(clientId);
+    if (!session || session.closed) return;
+
+    const previousSilencePromptCount = session.silencePromptCount;
+    session.isUserSpeaking = true;
+    session.ignoreNextBotFinishedEvent = true;
+    session.awaitingSilencePromptPlayback = false;
+    session.silencePromptCount = 0;
+    this._clearNoAnswerTimer(session, 'user_started_speaking');
+    this.logger?.info(`[BasePhoneCall] User speech reset no-answer state for ${clientId}`, {
+      previousSilencePromptCount,
+      currentSilencePromptCount: session.silencePromptCount,
+      maxCountSilenceTime
+    });
+  }
+
+  handleUserStoppedSpeaking(clientId) {
+    const session = this.sessions.get(clientId);
+    if (!session || session.closed) return;
+
+    session.isUserSpeaking = false;
+  }
+
+  handleBotResponseStarted(clientId) {
+    const session = this.sessions.get(clientId);
+    if (!session || session.closed) return;
+
+    session.ignoreNextBotFinishedEvent = false;
+    this._clearNoAnswerTimer(session, 'bot_response_started');
+  }
+
+  _startNoAnswerTimer(clientId) {
+    const session = this.sessions.get(clientId);
+    const timeoutSeconds = session?.noAnswerTimeoutSeconds;
+
+    if (
+      !session ||
+      session.closed ||
+      session.isEndingForNoAnswer ||
+      session.isUserSpeaking ||
+      session.awaitingSilencePromptPlayback ||
+      !Number.isFinite(timeoutSeconds) ||
+      timeoutSeconds <= 0
+    ) {
+      return;
+    }
+
+    this._clearNoAnswerTimer(session, 'starting_no_answer_timer');
+    session.noAnswerTimeout = setTimeout(() => {
+      session.noAnswerTimeout = null;
+      this.logger?.info(`[BasePhoneCall] No-answer timer expired for ${clientId}`, {
+        currentSilencePromptCount: session.silencePromptCount,
+        nextSilencePromptCount: session.silencePromptCount + 1,
+        maxCountSilenceTime
+      });
+      this._sendNoAnswerPrompt(clientId).catch((error) => {
+        this.logger?.error(`[BasePhoneCall] No-answer prompt failed for ${clientId}:`, error.message);
+      });
+    }, timeoutSeconds * 1000);
+
+    this.logger?.info(`[BasePhoneCall] No-answer timer started for ${clientId}`, {
+      timeoutSeconds,
+      silencePromptCount: session.silencePromptCount
+    });
+  }
+
+  async _sendNoAnswerPrompt(clientId) {
+    const session = this.sessions.get(clientId);
+    if (
+      !session ||
+      session.closed ||
+      session.isEndingForNoAnswer ||
+      session.isUserSpeaking ||
+      session.awaitingSilencePromptPlayback
+    ) {
+      return;
+    }
+
+    const message = noAnswerMessages[session.silencePromptCount % noAnswerMessages.length];
+    this.logger?.info(`[BasePhoneCall] Sending no-answer prompt to FullDuplex for ${clientId}`, {
+      nextSilencePromptCount: session.silencePromptCount + 1,
+      maxCountSilenceTime,
+      messageIndex: session.silencePromptCount % noAnswerMessages.length
+    });
+    const started = session.fullDuplex?.speakSilenceMessage(message);
+
+    if (!started) {
+      this.logger?.warn(`[BasePhoneCall] Unable to send no-answer prompt for ${clientId}`);
+      return;
+    }
+
+    session.silencePromptCount += 1;
+    session.awaitingSilencePromptPlayback = true;
+    this.logger?.info(`[BasePhoneCall] No-answer prompt ${session.silencePromptCount}/${maxCountSilenceTime} started for ${clientId}`);
+  }
+
+  async _endForNoAnswer(clientId) {
+    const session = this.sessions.get(clientId);
+    if (!session || session.closed || session.isEndingForNoAnswer) return;
+
+    session.isEndingForNoAnswer = true;
+    this._clearNoAnswerTimer(session, 'maximum_silence_count_reached');
+    this.logger?.info(`[BasePhoneCall] Ending session ${clientId} after ${maxCountSilenceTime} unanswered silence prompts`);
+    this._send(session, {
+      event: 'session_ended',
+      reason: 'no_answer_timeout',
+      message: 'We ended this session because we did not receive a response after several gentle reminders.'
+    });
+    await this._cleanup(clientId);
+  }
+
+  _clearNoAnswerTimer(session, reason) {
+    if (session?.noAnswerTimeout) {
+      clearTimeout(session.noAnswerTimeout);
+      session.noAnswerTimeout = null;
+      this.logger?.info(`[BasePhoneCall] No-answer timer cancelled for ${session.clientId}`, {
+        reason,
+        currentSilencePromptCount: session.silencePromptCount,
+        maxCountSilenceTime
+      });
+    }
+  }
 
   sendAudio(clientId, pcmBuffer, sampleRate = 24000) {
     const session = this.sessions.get(clientId);
@@ -352,6 +536,7 @@ class BasePhoneCall {
     }
 
     session.closed = true;
+    this._clearNoAnswerTimer(session, 'session_cleanup');
     this.logger?.info(`[BasePhoneCall] Cleaning up session ${clientId}`);
 
     try {

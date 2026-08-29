@@ -44,7 +44,10 @@ function isAnyTopicSelection(topic) {
                 config => config.webrtcId === "webrtc_talk"
             );
 
-            const projectConfig = { silencePeriod: webrtcConfig?.silencePeriod };
+            const projectConfig = {
+                silencePeriod: webrtcConfig?.silencePeriod,
+                noAnswerTimeoutSeconds: webrtcConfig?.noAnswerTimeoutSeconds
+            };
             const timerConfig = webrtcConfig?.timerConfig || {};
 
             const minUserWordsForAnalysis = webrtcConfig?.minUserWordsForAnalysis || 30;

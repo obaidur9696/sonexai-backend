@@ -426,6 +426,7 @@ If the user attempts to change either one, politely redirect the conversation ba
             // ========== USER START SPEAKING ==========
             if (evt.type === 'input_audio_buffer.speech_started') {
                 this.logger.info(`[FullDuplex] User started speaking for client ${this.clientId}`);
+                this.basePhoneCall.handleUserStartedSpeaking(this.clientId);
                 // 🔥 FLUSH bot audio immediately when user starts speaking
                 this.handleBargeIn();
                 if (!session.isUserTranscribing) {
@@ -439,6 +440,7 @@ If the user attempts to change either one, politely redirect the conversation ba
             // ========== USER SPEECH STOPPED ==========
             if (evt.type === 'input_audio_buffer.speech_stopped') {
                 this.logger.info(`[FullDuplex] User stopped speaking for client ${this.clientId}`);
+                this.basePhoneCall.handleUserStoppedSpeaking(this.clientId);
                 return;
             }
 
@@ -504,6 +506,7 @@ If the user attempts to change either one, politely redirect the conversation ba
                 session.isBotTranscribing = false;
                 session.botSentence = ''; // Reset bot sentence for new response
                 session.isAudioResponseComplete = false;
+                this.basePhoneCall.handleBotResponseStarted(this.clientId);
                 return;
             }
 
@@ -630,6 +633,29 @@ If the user attempts to change either one, politely redirect the conversation ba
     }
 
     // 🎧 Handle sending bot audio to client with proper timing
+    speakSilenceMessage(message) {
+        const session = this.sessions.get(this.clientId);
+        if (!message || !session?.isReady || !this.openAiWs || this.openAiWs.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+
+        const selectedLanguage = session.preferences?.language || 'en';
+        this.logger.info(`[FullDuplex] Sending no-answer silence message for client ${this.clientId}`, {
+            message,
+            selectedLanguage
+        });
+
+        this.openAiWs.send(JSON.stringify({
+            type: 'response.create',
+            response: {
+                conversation: 'none',
+                instructions: `The selected session language is "${selectedLanguage}". The following English text is a source reminder, not the language to speak. Speak only one warm, polished silence reminder that faithfully conveys its meaning in the selected session language. If the selected session language is English, speak the source reminder verbatim. If it is not English, naturally translate the reminder into the selected session language and do not say any English words. Do not answer the reminder, add a greeting, add new information, or ask any question beyond the meaning already present in the source reminder. Source reminder: "${message}"`
+            }
+        }));
+
+        return true;
+    }
+
     _startBotAudioPlayback() {
         const session = this.sessions.get(this.clientId);
         if (!session || session.playInterval) return; // already running
