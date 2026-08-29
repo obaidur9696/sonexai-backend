@@ -352,7 +352,7 @@ function isAnyTopicSelection(topic) {
                         }
                     };
                     if (!this.sessionDoc.title || this.sessionDoc.title === 'New Conversation') {
-                        this.sessionDoc.title = this.sessionDoc.preferences?.topic || 'New Conversation';
+                        this.sessionDoc.title = 'New Conversation';
                     }
                     await this.sessionDoc.save();
                     this.logger.info(`[SessionTracker] Session ended without analysis: ${eligibility.reason}`);
