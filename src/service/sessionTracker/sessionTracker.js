@@ -547,9 +547,12 @@ LANGUAGE OUTPUT RULES — HIGHEST PRIORITY
 
 Use preferredLanguage from the input as the mandatory language for every generated analysis value. It is the configured session language and must not be overridden by the languages detected in user messages.
 
+Treat preferredLanguage as an absolute output-language lock. It is authoritative whether supplied as a language name or a language code. Never choose the report language from the language of the transcript, the selected topic, assistant messages, or languages.primary/languages.detected.
+
 Every generated human-readable TEXT value must be written only in preferredLanguage, including:
 - conversationTitle.value
 - summary.value
+- scoreRanges.level
 - communicationSkill.level
 - communicationSkill.feedback
 - engagement.level
@@ -563,13 +566,15 @@ Every generated human-readable TEXT value must be written only in preferredLangu
 - overallConversation.level
 - overallConversation.feedback
 
-For every preferredLanguage value, every generated text field must use that same language.
+For every preferredLanguage value, every generated text field must use that same language. When preferredLanguage is not English, do not return English words, English labels, or English sentences in any generated analysis field. This remains mandatory even when the user spoke English or multiple languages during the session; express the analysis in preferredLanguage instead.
 
-Do not mix languages in generated text. A level is a human-readable text field and must always be written in preferredLanguage.
+Do not mix languages in generated text. Every scoreRanges.level and every other level is a human-readable text field and must always be written in preferredLanguage.
 
 Every level value must be the preferredLanguage translation of exactly one of these five fixed rating categories: Excellent, Good, Average, Fair, or Poor. These English category names are semantic references for selecting the rating only; never output their English text unless preferredLanguage is English. Never use descriptive phrases such as "strong performance", "adequate performance", or "needs improvement" as a level value.
 
-Before returning JSON, validate every level field against preferredLanguage. If preferredLanguage is not English, replace any English rating word with its natural, concise equivalent in preferredLanguage. Do not hardcode a language-specific mapping; dynamically use the correct equivalent for the supplied preferredLanguage.
+Before returning JSON, validate every generated human-readable field against preferredLanguage. If preferredLanguage is not English, replace any English wording with its natural equivalent in preferredLanguage. Do not hardcode a language-specific mapping; dynamically use the correct equivalent for the supplied preferredLanguage.
+
+scoreRanges is the single source of truth for level values in this report. First generate its five level strings in preferredLanguage, then reuse those exact strings for every scored field. A level in communicationSkill, engagement, grammar, assistantPerformance, or overallConversation must exactly equal one scoreRanges.level value; do not use a synonym, variation, English fallback, or a different translation of the same category.
 
 Scores and ISO language codes must remain JSON numbers and codes because the schema requires them. The numeric score is language-neutral; all human-readable descriptive text, labels, feedback, strengths, and improvements must follow preferredLanguage.
 
@@ -730,6 +735,15 @@ Use these exact score-to-level mappings for every level field:
 - 40 to 59: the preferredLanguage translation of "Fair" only.
 - 0 to 39: the preferredLanguage translation of "Poor" only.
 
+scoreRanges must always contain exactly these five objects, in this exact order, with no additional objects:
+- { "level": preferredLanguage equivalent of "Excellent", "minScore": 90, "maxScore": 100 }
+- { "level": preferredLanguage equivalent of "Good", "minScore": 75, "maxScore": 89 }
+- { "level": preferredLanguage equivalent of "Average", "minScore": 60, "maxScore": 74 }
+- { "level": preferredLanguage equivalent of "Fair", "minScore": 40, "maxScore": 59 }
+- { "level": preferredLanguage equivalent of "Poor", "minScore": 0, "maxScore": 39 }
+
+For every scored field with a numeric score, use the exact matching scoreRanges.level string. Never use a synonym, a different translation, an English fallback, an explanation, or a performance phrase as a level. If a scored field has insufficient evidence, keep its score and level null as required by the schema; scoreRanges must still contain all five localized range objects.
+
 The level must match the numeric score range exactly. Return only the concise preferredLanguage equivalent of the assigned rating category in a level field—never English text when preferredLanguage is another language, and never an alternative wording, explanation, or performance phrase. Put specific details only in the feedback field, written in preferredLanguage.
 
 Return this exact JSON schema:
@@ -747,6 +761,33 @@ Return this exact JSON schema:
         "primary": null,
         "detected": []
     },
+    "scoreRanges": [
+        {
+            "level": null,
+            "minScore": 90,
+            "maxScore": 100
+        },
+        {
+            "level": null,
+            "minScore": 75,
+            "maxScore": 89
+        },
+        {
+            "level": null,
+            "minScore": 60,
+            "maxScore": 74
+        },
+        {
+            "level": null,
+            "minScore": 40,
+            "maxScore": 59
+        },
+        {
+            "level": null,
+            "minScore": 0,
+            "maxScore": 39
+        }
+    ],
     "communicationSkill": {
         "status": true,
         "score": null,
@@ -801,7 +842,9 @@ ${conversationData.userMessages.length
 ASSISTANT MESSAGES — use ONLY for assistantPerformance:
 ${conversationData.assistantMessages.length
                     ? conversationData.assistantMessages.map((text, index) => `${index + 1}. ${text}`).join('\n')
-                    : 'No assistant messages available.'}`;
+                    : 'No assistant messages available.'}
+
+FINAL OUTPUT LANGUAGE LOCK: Generate every human-readable analysis value only in the configured preferredLanguage: ${conversationData.preferredLanguage}. This includes conversationTitle.value, summary.value, every scoreRanges.level, every skill level, every feedback value, strengths.items, improvements.items, assistantPerformance, and overallConversation. Do not use the language of the messages or the detected languages to choose these values. If preferredLanguage is not English, no generated English label, feedback, summary, title, strength, or improvement may be returned.`;
 
             const response = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',

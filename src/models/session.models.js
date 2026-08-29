@@ -92,6 +92,12 @@ const sessionSchema = new Schema(
                 detected: { type: [String] }
             },
 
+            scoreRanges: [{
+                level: { type: String },
+                minScore: { type: Number },
+                maxScore: { type: Number }
+            }],
+
             communicationSkill: {
                 status: { type: Boolean, default: false },
                 score: { type: Number },
