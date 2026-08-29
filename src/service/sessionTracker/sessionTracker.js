@@ -9,8 +9,12 @@ import { normalizeOpenAITokenUsage } from '../../utils/normalizeOpenAITokenUsage
 const OPENAI_MODEL = 'gpt-4o-mini';
 const MIN_USER_WORDS = 30; // Minimum user words required for analysis
 
-class SessionTracker {
-    constructor({ preferences, basePhoneCall, clientId, logger}) {
+function isAnyTopicSelection(topic) {
+    return String(topic || '').trim().toLowerCase() === 'any topic';
+}
+
+ class SessionTracker {
+    constructor({ preferences, basePhoneCall, clientId, logger }) {
         this.clientId = clientId;
         this.sessionId = uuidv4()
         this.preferences = preferences;
@@ -183,23 +187,34 @@ class SessionTracker {
             .filter(Boolean)
             .join(' ') || 'User';
         const topic = this.preferences?.topic || 'general conversation';
-
+        const isAnyTopic = isAnyTopicSelection(topic);
+        const titleTopic = isAnyTopic ? 'New Conversation' : topic;
         if (isEnglishLanguage(language)) {
+            if (isAnyTopic) {
+                session.title = titleTopic;
+                await session.save();
+            }
             return;
         }
 
         const translated = await transliterateText({
             name: fullName,
-            topic,
+            topic: titleTopic,
             language,
             logger: this.logger
         });
 
         this.preferences.name = translated.name;
-        this.preferences.topic = translated.topic;
         session.preferences.name = translated.name;
-        session.preferences.topic = translated.topic;
         session.title = translated.topic;
+
+        // "Any Topic" is a control value for FullDuplex, not a display topic.
+        // Keep it unchanged in preferences while saving the translated
+        // "New Conversation" title. All other topics keep the existing behavior.
+        if (!isAnyTopic) {
+            this.preferences.topic = translated.topic;
+            session.preferences.topic = translated.topic;
+        }
 
         if (translated.tokenUsage) {
             session.tokenUsage.input_tokens += translated.tokenUsage.input_tokens;
@@ -222,7 +237,7 @@ class SessionTracker {
             sessionId: this.sessionDoc.sessionId,
             status: this.sessionDoc.status,
             createdAt: this.sessionDoc.createdAt,
-            topic: preferences.topic || this.sessionDoc.title || 'New Conversation',
+            topic: this.sessionDoc.title || 'New Conversation',
             name: preferences.name || [this.preferences?.firstName, this.preferences?.lastName]
                 .filter(Boolean)
                 .join(' ') || 'User',
@@ -314,75 +329,75 @@ class SessionTracker {
                     return;
                 }
 
-            const minUserWords = this.sessionData.minUserWordsForAnalysis || 30;
-            const eligibility = await this._shouldAnalyzeConversation(
-                this.sessionDoc.messages,
-                minUserWords
-            );
-            this.sessionDoc.totalMessages = eligibility.statistics.totalMessages || 0;
-            this.sessionDoc.totalWords = eligibility.statistics.totalWords || 0;
+                const minUserWords = this.sessionData.minUserWordsForAnalysis || 30;
+                const eligibility = await this._shouldAnalyzeConversation(
+                    this.sessionDoc.messages,
+                    minUserWords
+                );
+                this.sessionDoc.totalMessages = eligibility.statistics.totalMessages || 0;
+                this.sessionDoc.totalWords = eligibility.statistics.totalWords || 0;
 
-            if (!eligibility.shouldAnalyze) {
-                // Save default insights with reason
-                this.sessionDoc.insights = {
-                    schemaVersion: 1,
-                    generatedBy: OPENAI_MODEL,
-                    generatedAt: new Date(),
-                    analysisStatus: {
-                        completed: false,
-                        reason: eligibility.reason
-                    }
-                };
-                if (!this.sessionDoc.title || this.sessionDoc.title === 'New Conversation') {
-                    this.sessionDoc.title = this.sessionDoc.preferences?.topic || 'New Conversation';
-                }
-                await this.sessionDoc.save();
-                this.logger.info(`[SessionTracker] Session ended without analysis: ${eligibility.reason}`);
-            } else {
-                // ✅ Generate insights (await)
-                await this._generateConversationInsights(this.sessionDoc);
-                if (this.sessionDoc.insights?.conversationTitle?.value) {
-                    this.sessionDoc.title = this.sessionDoc.insights.conversationTitle.value;
-                } else {
-                    this.sessionDoc.title = this.sessionDoc.preferences?.topic || 'New Conversation';
-                }
-                await this.sessionDoc.save();
-                this.logger.info(`[SessionTracker] Session ended with insights: ${this.sessionId}`);
-            }
-
-            if (this.sessionDoc && this.sessionDoc.status === 'active') {
-                this.sessionDoc.status = 'ended';
-                this.sessionDoc.endedAt = new Date();
-
-                // Calculate total talk time in seconds
-                const startTime = this.sessionDoc.createdAt;
-                const endTime = this.sessionDoc.endedAt;
-                const sessionTalkTimeSeconds = Math.floor((endTime - startTime) / 1000);
-                this.sessionDoc.totalTalkTimeSeconds = sessionTalkTimeSeconds;
-
-                await this.sessionDoc.save();
-                this.logger.info(`[SessionTracker] Session finalized: ${this.sessionId}, talk time: ${sessionTalkTimeSeconds}s`);
-
-                // Update user stats if authenticated (userId exists)
-                if (this.sessionDoc.userId && this.sessionDoc.sessionType === 'authenticated') {
-                    await User.findByIdAndUpdate(
-                        this.sessionDoc.userId,
-                        {
-                            $inc: {
-                                totalTalkTimeSeconds: sessionTalkTimeSeconds,
-                                totalSessions: 1
-                            },
-                            $push: {
-                                sessions: this.sessionDoc._id
-                            }
+                if (!eligibility.shouldAnalyze) {
+                    // Save default insights with reason
+                    this.sessionDoc.insights = {
+                        schemaVersion: 1,
+                        generatedBy: OPENAI_MODEL,
+                        generatedAt: new Date(),
+                        analysisStatus: {
+                            completed: false,
+                            reason: eligibility.reason
                         }
-                    );
-                    this.logger.info(`[SessionTracker] User stats updated for: ${this.sessionDoc.userId}`);
+                    };
+                    if (!this.sessionDoc.title || this.sessionDoc.title === 'New Conversation') {
+                        this.sessionDoc.title = this.sessionDoc.preferences?.topic || 'New Conversation';
+                    }
+                    await this.sessionDoc.save();
+                    this.logger.info(`[SessionTracker] Session ended without analysis: ${eligibility.reason}`);
+                } else {
+                    // ✅ Generate insights (await)
+                    await this._generateConversationInsights(this.sessionDoc);
+                    if (this.sessionDoc.insights?.conversationTitle?.value) {
+                        this.sessionDoc.title = this.sessionDoc.insights.conversationTitle.value;
+                    } else {
+                        this.sessionDoc.title = this.sessionDoc.preferences?.topic || 'New Conversation';
+                    }
+                    await this.sessionDoc.save();
+                    this.logger.info(`[SessionTracker] Session ended with insights: ${this.sessionId}`);
                 }
-            }
-            // Clear in-memory session state
-            this.sessionData = null;
-            this.sessionDoc = null;
+
+                if (this.sessionDoc && this.sessionDoc.status === 'active') {
+                    this.sessionDoc.status = 'ended';
+                    this.sessionDoc.endedAt = new Date();
+
+                    // Calculate total talk time in seconds
+                    const startTime = this.sessionDoc.createdAt;
+                    const endTime = this.sessionDoc.endedAt;
+                    const sessionTalkTimeSeconds = Math.floor((endTime - startTime) / 1000);
+                    this.sessionDoc.totalTalkTimeSeconds = sessionTalkTimeSeconds;
+
+                    await this.sessionDoc.save();
+                    this.logger.info(`[SessionTracker] Session finalized: ${this.sessionId}, talk time: ${sessionTalkTimeSeconds}s`);
+
+                    // Update user stats if authenticated (userId exists)
+                    if (this.sessionDoc.userId && this.sessionDoc.sessionType === 'authenticated') {
+                        await User.findByIdAndUpdate(
+                            this.sessionDoc.userId,
+                            {
+                                $inc: {
+                                    totalTalkTimeSeconds: sessionTalkTimeSeconds,
+                                    totalSessions: 1
+                                },
+                                $push: {
+                                    sessions: this.sessionDoc._id
+                                }
+                            }
+                        );
+                        this.logger.info(`[SessionTracker] User stats updated for: ${this.sessionDoc.userId}`);
+                    }
+                }
+                // Clear in-memory session state
+                this.sessionData = null;
+                this.sessionDoc = null;
             } catch (error) {
                 this.logger.error(`[SessionTracker] Finalize error:`, error.message);
             }
