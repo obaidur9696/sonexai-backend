@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "migrate:user-names": "node scripts/migrate-user-names.js"
+    "migrate:user-names": "node scripts/migrate-user-names.js",
+    "migrate:remove-user-sessions": "node scripts/remove-user-sessions.js"
   },
   "author": "",
   "license": "ISC",

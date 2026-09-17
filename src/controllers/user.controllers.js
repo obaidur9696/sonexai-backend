@@ -67,7 +67,7 @@ const registerUser = asyncHandler(async (req, res) => {
             age: age || 18
         });
 
-        const createdUser = await User.findById(user._id).select("-password -refreshToken");
+        const createdUser = await User.findById(user._id).select("-password -refreshToken -sessions");
         if (!createdUser) {
             throw new ApiError(500, "Something went wrong while registering user");
         }
@@ -101,7 +101,7 @@ const loginUser = asyncHandler(async (req, res) => {
             throw new ApiError(400, "Email and password are required");
         }
 
-        const user = await User.findOne({ email }).select("+password");
+        const user = await User.findOne({ email }).select("+password -sessions");
         if (!user) {
             throw new ApiError(401, "Invalid email or password");
         }
@@ -113,7 +113,7 @@ const loginUser = asyncHandler(async (req, res) => {
 
         const { accessToken, refreshToken } = await generateAcessAndRefreshToken(user._id);
 
-        const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
+        const loggedInUser = await User.findById(user._id).select("-password -refreshToken -sessions");
 
         const isProduction = process.env.NODE_ENV === "production";
 
@@ -204,7 +204,7 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
             process.env.REFRESH_TOKEN_SECRET
         );
 
-        const user = await User.findById(decodedToken?._id).select("+refreshToken");
+        const user = await User.findById(decodedToken?._id).select("+refreshToken -sessions");
         if (!user) {
             throw new ApiError(401, "Invalid refresh token");
         }
@@ -244,7 +244,7 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 
 const getCurrentUser = asyncHandler(async (req, res) => {
     try {
-        const user = await User.findById(req.user._id).select("-password -refreshToken");
+        const user = await User.findById(req.user._id).select("-password -refreshToken -sessions");
         
         logger?.info(`[Auth] Current user fetched: ${req.user._id}`);
         return res
@@ -302,7 +302,7 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
             req.user?._id,
             { $set: updateFields },
             { returnDocument: 'after', runValidators: true }
-        ).select("-password -refreshToken");
+        ).select("-password -refreshToken -sessions");
 
         if (!user) {
             throw new ApiError(404, "User not found");

@@ -372,7 +372,7 @@ If the user attempts to change either one, politely redirect the conversation ba
                         create_response: true
                     },
                     transcription: {
-                        model: "gpt-realtime-whisper",
+                        model: "gpt-live-transcribe",
                         language: language,
                         delay: "high" // Values: "minimal" | "low" | "medium" | "high" | "xhigh"
                     }

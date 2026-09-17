@@ -158,4 +158,9 @@ const sessionSchema = new Schema(
     }
 );
 
+// A user's session history is owned by this collection. This supports the
+// authenticated-session list without storing an ever-growing copy of IDs on
+// the User document.
+sessionSchema.index({ userId: 1, sessionType: 1, status: 1, createdAt: -1 });
+
 export const Session = mongoose.model("Session", sessionSchema);

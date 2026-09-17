@@ -6,7 +6,7 @@ import { isEnglishLanguage, transliterateText } from '../../utils/transliterateT
 import { normalizeOpenAITokenUsage } from '../../utils/normalizeOpenAITokenUsage.js';
 
 
-const OPENAI_MODEL = 'gpt-4o-mini';
+const OPENAI_MODEL = 'gpt-5-mini';
 const MIN_USER_WORDS = 30; // Minimum user words required for analysis
 
 function isAnyTopicSelection(topic) {
@@ -62,7 +62,7 @@ function isAnyTopicSelection(topic) {
 
             // Step 1: Validate userId if present
             if (userId) {
-                const user = await User.findById(userId);
+                const user = await User.findById(userId).select('_id');
                 if (!user) {
                     this.logger.warn('Invalid user ID provided in session preferences', { userId });
                     this.basePhoneCall.sendError(this.clientId, 'Invalid user ID. Please login again.');
@@ -388,9 +388,6 @@ function isAnyTopicSelection(topic) {
                                 $inc: {
                                     totalTalkTimeSeconds: sessionTalkTimeSeconds,
                                     totalSessions: 1
-                                },
-                                $push: {
-                                    sessions: this.sessionDoc._id
                                 }
                             }
                         );
@@ -860,7 +857,6 @@ FINAL OUTPUT LANGUAGE LOCK: Generate every human-readable analysis value only in
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: userPrompt }
                     ],
-                    temperature: 0.2,
                     response_format: { type: 'json_object' }
                 })
             });

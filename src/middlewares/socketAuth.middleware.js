@@ -36,7 +36,7 @@ export const socketAuth = async (socket, next) => {
         if (token) {
             try {
                 const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-                const user = await User.findById(decoded._id).select('-password -refreshToken');
+                const user = await User.findById(decoded._id).select('-password -refreshToken -sessions');
 
                 if (!user) {
                     return next(new Error('User not found'));

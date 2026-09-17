@@ -46,11 +46,7 @@ const userSchema = new Schema(
         totalSessions: {
             type: Number,
             default: 0
-        },
-        sessions: [{
-            type: Schema.Types.ObjectId,
-            ref: 'Session'
-        }]
+        }
     },
     {
         timestamps: true

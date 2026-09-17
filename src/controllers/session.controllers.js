@@ -282,9 +282,6 @@ export const deleteSession = asyncHandler(async (req, res) => {
             throw new ApiError(404, 'Session not found');
         }
 
-        // Store session ObjectId
-        const sessionObjectId = session._id;
-
         // Delete the session
         await Session.findOneAndDelete({
             sessionId,
@@ -292,12 +289,9 @@ export const deleteSession = asyncHandler(async (req, res) => {
             sessionType: 'authenticated'
         });
 
-        // ✅ ONLY remove session ID from user's sessions array
-        // ✅ DO NOT change totalSessions or totalTalkTimeSeconds
-        await User.findByIdAndUpdate(userId, {
-            $pull: { sessions: sessionObjectId }
-            // ❌ Remove $inc for totalSessions and totalTalkTimeSeconds
-        });
+        // User totals are lifetime counters, so deleting a conversation does
+        // not alter totalSessions or totalTalkTimeSeconds. The session itself
+        // is the sole record of the User-to-Session relationship.
 
         logger?.info('[Sessions] Session deleted successfully:', {
             userId: userId.toString(),
