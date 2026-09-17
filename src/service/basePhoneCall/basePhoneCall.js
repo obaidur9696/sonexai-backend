@@ -569,7 +569,7 @@ class BasePhoneCall {
       if (session?.ws?.readyState === 1) {
         session.ws.send(JSON.stringify(obj));
       } else {
-        this.logger?.warn(`[BasePhoneCall] Cannot send - WebSocket not ready for client ${session?.clientId}`);
+        // this.logger?.warn(`[BasePhoneCall] Cannot send - WebSocket not ready for client ${session?.clientId}`);
       }
     } catch (error) {
       this.logger?.error(`[BasePhoneCall] Failed to send message to client ${session?.clientId}:`, error.message);

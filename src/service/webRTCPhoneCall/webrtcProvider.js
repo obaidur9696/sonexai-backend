@@ -376,12 +376,11 @@ class WebRTCProvider {
   // Fetch user data from database and merge it into preferences
   async _fetchAndMergeUserData(preferences) {
     try {
-      const user = await User.findById(preferences.userId).select('firstName lastName gender age');
+      const user = await User.findById(preferences.userId).select('name gender age');
 
       if (user) {
         // Merge user data into preferences
-        preferences.firstName = user.firstName;
-        preferences.lastName = user.lastName;
+        preferences.name = user.name;
         preferences.gender = user.gender;
         preferences.age = user.age;
       }

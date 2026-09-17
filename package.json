@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "migrate:user-names": "node scripts/migrate-user-names.js"
   },
   "author": "",
   "license": "ISC",

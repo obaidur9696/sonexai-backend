@@ -1,6 +1,16 @@
 import { normalizeOpenAITokenUsage } from './normalizeOpenAITokenUsage.js';
 
-const OPENAI_MODEL = 'gpt-4o-mini';
+const OPENAI_MODEL = process.env.OPENAI_TRANSLITERATION_MODEL || 'gpt-5.4';
+
+function getLanguageName(language) {
+    const languageCode = String(language || '').trim();
+
+    try {
+        return new Intl.DisplayNames(['en'], { type: 'language' }).of(languageCode) || languageCode;
+    } catch {
+        return languageCode;
+    }
+}
 
 export function isEnglishLanguage(language) {
     const normalizedLanguage = String(language || '').trim().toLowerCase();
@@ -10,7 +20,7 @@ export function isEnglishLanguage(language) {
 }
 
 /**
- * Transliterate a user's name and selected topic into the target language script.
+ * Localize a selected topic and transliterate a user's name for the target language.
  * English preferences are returned unchanged without making an OpenAI request.
  *
  * @param {Object} params
@@ -33,24 +43,14 @@ export async function transliterateText({
     }
 
     try {
-        const systemPrompt = `You are a transliteration expert. Convert the given English text into the target language script.
-
-RULES:
-1. DO NOT translate the meaning — keep the exact same words/phrases.
-2. ONLY convert the script/writing system to the target language.
-3. For names: Write the name as it would be written in the target language script.
-4. For topics: Write the topic as it would be written in the target language script.
-5. Return ONLY valid JSON with "name" and "topic" fields.
-
-Example:
-Input: name="Safi Rahman", topic="Photography", language="ur"
-Output: {"name":"صفی رحمان","topic":"فوٹوگرافی"}
-
-Return ONLY JSON, no other text.`;
-
-        const userPrompt = `Convert these to ${language} script:
-Name: ${name}
-Topic: ${topic}`;
+        const targetLanguage = getLanguageName(language);
+        const systemPrompt = `Localize exactly two fields for the target language.
+Target language: ${targetLanguage} (ISO code: ${language}).
+Rules:
+1. topic must be written in ${targetLanguage}, never another language.
+2. name must keep the same person's name and pronunciation. Transliterate it only when ${targetLanguage} uses a different script.
+3. If ${targetLanguage} uses Latin script, keep the Latin name spelling unchanged.
+4. Return only JSON: {"name":"...","topic":"..."}.`;
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
@@ -62,9 +62,8 @@ Topic: ${topic}`;
                 model: OPENAI_MODEL,
                 messages: [
                     { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
+                    { role: 'user', content: `Name: ${name}\nTopic: ${topic}` }
                 ],
-                temperature: 0.1,
                 response_format: { type: 'json_object' }
             })
         });
@@ -78,8 +77,8 @@ Topic: ${topic}`;
         const tokenUsage = normalizeOpenAITokenUsage(data.usage);
 
         return {
-            name: result.name || name,
-            topic: result.topic || topic,
+            name: typeof result.name === 'string' && result.name.trim() ? result.name.trim() : name,
+            topic: typeof result.topic === 'string' && result.topic.trim() ? result.topic.trim() : topic,
             tokenUsage
         };
     } catch (error) {

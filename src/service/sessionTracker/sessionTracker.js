@@ -133,6 +133,7 @@ function isAnyTopicSelection(topic) {
                     preferences: {
                         language: this.preferences.language,
                         topic: this.preferences.topic,
+                        name: this.preferences.name,
                         discussionDepth: this.preferences.discussionDepth,
                         voiceAccent: this.preferences.voiceAccent,
                         sensitivity: this.preferences.sensitivity
@@ -186,9 +187,9 @@ function isAnyTopicSelection(topic) {
 
     async _applyTransliteratedPreferences(session) {
         const language = this.preferences?.language || 'en';
-        const fullName = [this.preferences?.firstName, this.preferences?.lastName]
-            .filter(Boolean)
-            .join(' ') || 'User';
+        const fullName = typeof this.preferences?.name === 'string' && this.preferences.name.trim()
+            ? this.preferences.name.trim()
+            : 'User';
         const topic = this.preferences?.topic || 'general conversation';
         const isAnyTopic = isAnyTopicSelection(topic);
         const titleTopic = isAnyTopic ? 'New Conversation' : topic;
@@ -241,9 +242,7 @@ function isAnyTopicSelection(topic) {
             status: this.sessionDoc.status,
             createdAt: this.sessionDoc.createdAt,
             topic: this.sessionDoc.title || 'New Conversation',
-            name: preferences.name || [this.preferences?.firstName, this.preferences?.lastName]
-                .filter(Boolean)
-                .join(' ') || 'User',
+            name: preferences.name || this.preferences?.name || 'User',
             preferences
         };
     }

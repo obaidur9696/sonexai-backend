@@ -5,6 +5,9 @@ import { User } from '../models/user.models.js';
 import jwt from 'jsonwebtoken'
 import logger from '../utils/Logger.js';
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const NAME_PATTERN = /^[A-Za-z]+(?: [A-Za-z]+)*$/;
+
 const generateAcessAndRefreshToken = async (userId) => {
     try {
         const user = await User.findById(userId)
@@ -27,30 +30,39 @@ const generateAcessAndRefreshToken = async (userId) => {
 
 const registerUser = asyncHandler(async (req, res) => {
     try {
-        const { email, password, firstName, lastName, gender, age } = req.body;
+        const { email, password, name, gender, age } = req.body;
 
         // Log registration attempt
         logger?.info('[Auth] Registration attempt:', {
             email,
-            firstName,
-            lastName,
+            name,
             hasPassword: !!password
         });
 
-        if ([email, password, firstName, lastName].some(field => !field || field.trim() === "")) {
+        if ([email, password, name].some(field => typeof field !== "string" || field.trim() === "")) {
             throw new ApiError(400, "All fields are required");
         }
 
-        const existingUser = await User.findOne({ email });
+        const normalizedEmail = email.trim().toLowerCase();
+        const normalizedName = name.trim();
+
+        if (!EMAIL_PATTERN.test(normalizedEmail)) {
+            throw new ApiError(400, "Please provide a valid email address");
+        }
+
+        if (!NAME_PATTERN.test(normalizedName)) {
+            throw new ApiError(400, "Name is not allowed. Use English letters and single spaces only");
+        }
+
+        const existingUser = await User.findOne({ email: normalizedEmail });
         if (existingUser) {
             throw new ApiError(409, "User with this email already exists");
         }
 
         const user = await User.create({
-            email,
+            email: normalizedEmail,
             password,
-            firstName,
-            lastName,
+            name: normalizedName,
             gender: gender || "prefer-not",
             age: age || 18
         });
@@ -253,22 +265,33 @@ const getCurrentUser = asyncHandler(async (req, res) => {
 
 const updateAccountDetails = asyncHandler(async (req, res) => {
     try {
-        const { firstName, lastName, email, age } = req.body;
+        const { name, email, age } = req.body;
 
         // Log update attempt with what fields are being updated
         logger?.info('[Auth] Account update attempt:', {
             userId: req.user?._id?.toString(),
             fieldsToUpdate: Object.keys(req.body),
-            firstName,
-            lastName,
+            name,
             email,
             age
         });
 
         const updateFields = {};
-        if (firstName) updateFields.firstName = firstName;
-        if (lastName) updateFields.lastName = lastName;
-        if (email) updateFields.email = email;
+        if (name !== undefined) {
+            if (typeof name !== "string" || name.trim() === "") {
+                throw new ApiError(400, "Name must be a non-empty string");
+            }
+            if (!NAME_PATTERN.test(name.trim())) {
+                throw new ApiError(400, "Name is not allowed. Use English letters and single spaces only");
+            }
+            updateFields.name = name.trim();
+        }
+        if (email !== undefined) {
+            if (typeof email !== "string" || !EMAIL_PATTERN.test(email.trim())) {
+                throw new ApiError(400, "Please provide a valid email address");
+            }
+            updateFields.email = email.trim().toLowerCase();
+        }
         if (age) updateFields.age = age;
 
         if (Object.keys(updateFields).length === 0) {

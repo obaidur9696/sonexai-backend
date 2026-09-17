@@ -97,9 +97,9 @@ class FullDuplex {
         const originalTopic = p.topic || 'general conversation';
         const mode = p.discussionDepth || 'balanced';
         const sensitivity = p.sensitivity ?? 0.5;
-        const fullName = p.name || [p.firstName, p.lastName]
-            .filter(Boolean)
-            .join(' ') || 'User';
+        const fullName = typeof p.name === 'string' && p.name.trim()
+            ? p.name.trim()
+            : 'User';
         const age = p.age || 'unknown';
         const gender = p.gender || 'unknown';
 

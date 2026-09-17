@@ -9,7 +9,8 @@ const userSchema = new Schema(
             required: true,
             unique: true,
             lowercase: true,
-            trim: true
+            trim: true,
+            match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Please provide a valid email address']
         },
         password: {
             type: String,
@@ -17,15 +18,11 @@ const userSchema = new Schema(
             minlength: 6,
             select: false
         },
-        firstName: {
+        name: {
             type: String,
             required: true,
-            trim: true
-        },
-        lastName: {
-            type: String,
-            required: true,
-            trim: true
+            trim: true,
+            match: [/^[A-Za-z]+(?: [A-Za-z]+)*$/, 'Name is not allowed. Use English letters and single spaces only']
         },
         gender: {
             type: String,
@@ -78,8 +75,7 @@ userSchema.methods.generateAccessToken = function () {
     const payload = {
         _id: this._id,
         email: this.email,
-        firstName: this.firstName,
-        lastName: this.lastName
+        name: this.name
     };
 
     return jwt.sign(
